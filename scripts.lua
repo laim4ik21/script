@@ -1,0 +1,262 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local Config = {
+    Aimbot = {Enabled = false, Fov = 150, Smooth = 0.2, TargetPart = "Head", MaxDist = 150},
+    Visuals = {Enabled = true, Chams = true, Color = Color3.fromRGB(180, 100, 255), R = 180, G = 100, B = 255},
+    Friends = {},
+    MenuKey = Enum.KeyCode.T, -- Переставлено на T
+    AimKey = Enum.KeyCode.Z
+}
+
+-- Система липкого приоритета (Sticky Target)
+local currentTarget = nil
+
+local Gui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
+Gui.Name = "Gemini_V25"
+Gui.ResetOnSpawn = false
+
+local Main = Instance.new("Frame", Gui)
+Main.Size = UDim2.new(0, 500, 0, 420)
+Main.Position = UDim2.new(0.5, -250, 0.5, -210)
+Main.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
+Main.BorderSizePixel = 0
+Main.Active = true
+
+local dragging, dragInput, dragStart, startPos
+Main.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true dragStart = input.Position startPos = Main.Position
+        input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then dragging = false end end)
+    end
+end)
+Main.InputChanged:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end end)
+local dragConn = RunService.RenderStepped:Connect(function()
+    if dragging and dragInput then
+        local delta = dragInput.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+local UIStroke = Instance.new("UIStroke", Main)
+UIStroke.Thickness = 2
+UIStroke.Color = Config.Visuals.Color
+
+local Sidebar = Instance.new("Frame", Main)
+Sidebar.Size = UDim2.new(0, 120, 1, 0)
+Sidebar.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+Sidebar.BorderSizePixel = 0
+
+local Container = Instance.new("Frame", Main)
+Container.Position = UDim2.new(0, 130, 0, 10)
+Container.Size = UDim2.new(1, -140, 1, -20)
+Container.BackgroundTransparency = 1
+
+local Pages = { 
+    Aimbot = Instance.new("ScrollingFrame", Container), 
+    Visuals = Instance.new("ScrollingFrame", Container),
+    Friends = Instance.new("ScrollingFrame", Container),
+    Misc = Instance.new("ScrollingFrame", Container)
+}
+
+for name, p in pairs(Pages) do
+    p.Size = UDim2.new(1, 0, 1, 0) p.BackgroundTransparency = 1 p.Visible = (name == "Aimbot") p.ScrollBarThickness = 2 p.CanvasSize = UDim2.new(0, 0, 2, 0)
+end
+
+local function UpdateInterface()
+    if not Main then return end
+    UIStroke.Color = Config.Visuals.Color
+    for _, v in pairs(Main:GetDescendants()) do
+        if v:IsA("TextButton") then
+            if v.Name == "Toggle_Active" then v.BackgroundColor3 = Config.Visuals.Color end
+            if v.Name == "Part_Selected" then v.BackgroundColor3 = Config.Visuals.Color end
+        end
+        if v:IsA("Frame") and v.Name == "Slider_Bar" then v.BackgroundColor3 = Config.Visuals.Color end
+    end
+end
+
+local function CreateTab(name, y)
+    local b = Instance.new("TextButton", Sidebar)
+    b.Size = UDim2.new(1, 0, 0, 45) b.Position = UDim2.new(0, 0, 0, y) b.BackgroundColor3 = Color3.fromRGB(22, 22, 22) b.Text = name:upper() b.TextColor3 = Color3.new(1, 1, 1) b.Font = Enum.Font.GothamBold b.BorderSizePixel = 0
+    b.MouseButton1Click:Connect(function() for n, p in pairs(Pages) do p.Visible = (n == name) end end)
+end
+
+CreateTab("Aimbot", 0) CreateTab("Visuals", 50) CreateTab("Friends", 100) CreateTab("Misc", 150)
+
+local function AddToggle(page, text, tbl, key, y)
+    local btn = Instance.new("TextButton", page)
+    btn.Size = UDim2.new(1, -10, 0, 30) btn.Position = UDim2.new(0, 5, 0, y) 
+    btn.BackgroundColor3 = tbl[key] and Config.Visuals.Color or Color3.fromRGB(28, 28, 28)
+    btn.Name = tbl[key] and "Toggle_Active" or "Toggle_Idle"
+    btn.Font = Enum.Font.Gotham btn.TextColor3 = Color3.new(1, 1, 1) btn.Text = text
+    btn.MouseButton1Click:Connect(function()
+        tbl[key] = not tbl[key]
+        btn.Name = tbl[key] and "Toggle_Active" or "Toggle_Idle"
+        btn.BackgroundColor3 = tbl[key] and Config.Visuals.Color or Color3.fromRGB(28, 28, 28)
+        UpdateInterface()
+    end)
+    return y + 35
+end
+
+local function AddSlider(page, text, tbl, key, y, min, max)
+    local tl = Instance.new("TextLabel", page) tl.Size = UDim2.new(1, -10, 0, 20) tl.Position = UDim2.new(0, 5, 0, y) tl.Text = text .. ": " .. tbl[key] tl.BackgroundTransparency = 1 tl.TextColor3 = Color3.new(1, 1, 1) tl.Font = Enum.Font.Gotham
+    local sld = Instance.new("TextButton", page) sld.Size = UDim2.new(1, -10, 0, 6) sld.Position = UDim2.new(0, 5, 0, y+22) sld.Text = "" sld.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    local bar = Instance.new("Frame", sld) bar.Name = "Slider_Bar" bar.Size = UDim2.new((tbl[key]-min)/(max-min), 0, 1, 0) bar.BackgroundColor3 = Config.Visuals.Color bar.BorderSizePixel = 0
+    sld.MouseButton1Down:Connect(function()
+        local c; c = RunService.RenderStepped:Connect(function()
+            local r = math.clamp((UserInputService:GetMouseLocation().X - sld.AbsolutePosition.X)/sld.AbsoluteSize.X, 0, 1)
+            local v = math.floor((min+(max-min)*r)*100)/100 tbl[key] = v bar.Size = UDim2.new(r, 0, 1, 0) tl.Text = text .. ": " .. v
+        end)
+        UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then c:Disconnect() end end)
+    end)
+    return y + 45
+end
+
+local function AddPartSelector(page, y)
+    local parts = {"Head", "UpperTorso", "HumanoidRootPart", "LeftHand", "RightHand"}
+    local ly = y
+    for _, pName in pairs(parts) do
+        local b = Instance.new("TextButton", page)
+        b.Size = UDim2.new(1, -10, 0, 25) b.Position = UDim2.new(0, 5, 0, ly)
+        b.Text = "Target: " .. pName b.Font = Enum.Font.Gotham b.TextColor3 = Color3.new(1,1,1)
+        b.Name = (Config.Aimbot.TargetPart == pName) and "Part_Selected" or "Part_Idle"
+        b.BackgroundColor3 = (Config.Aimbot.TargetPart == pName) and Config.Visuals.Color or Color3.fromRGB(30,30,30)
+        b.MouseButton1Click:Connect(function()
+            Config.Aimbot.TargetPart = pName
+            for _, v in pairs(page:GetChildren()) do if v:IsA("TextButton") and v.Text:find("Target:") then v.BackgroundColor3 = Color3.fromRGB(30,30,30) v.Name = "Part_Idle" end end
+            b.BackgroundColor3 = Config.Visuals.Color b.Name = "Part_Selected"
+        end)
+        ly = ly + 30
+    end
+    return ly
+end
+
+local ay = 0
+ay = AddToggle(Pages.Aimbot, "Aimbot [Z]", Config.Aimbot, "Enabled", ay)
+ay = AddSlider(Pages.Aimbot, "Fov", Config.Aimbot, "Fov", ay, 10, 800)
+ay = AddSlider(Pages.Aimbot, "Smooth", Config.Aimbot, "Smooth", ay, 0.01, 1)
+ay = AddSlider(Pages.Aimbot, "Max Distance (m)", Config.Aimbot, "MaxDist", ay, 10, 1000)
+ay = AddPartSelector(Pages.Aimbot, ay)
+
+local vy = 0
+vy = AddToggle(Pages.Visuals, "Chams", Config.Visuals, "Chams", vy)
+
+local unl = Instance.new("TextButton", Pages.Misc)
+unl.Size = UDim2.new(1, -10, 0, 40) unl.Position = UDim2.new(0, 5, 0, 0)
+unl.BackgroundColor3 = Color3.fromRGB(150, 50, 50) unl.Text = "UNLOAD SCRIPT" unl.TextColor3 = Color3.new(1, 1, 1) unl.Font = Enum.Font.GothamBold
+unl.MouseButton1Click:Connect(function() _G.GeminiActive = false Gui:Destroy() dragConn:Disconnect() end)
+
+local function RefreshFriends()
+    if not Pages.Friends then return end
+    Pages.Friends:ClearAllChildren()
+    local fy = 0
+    for _, p in pairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        local btn = Instance.new("TextButton", Pages.Friends)
+        btn.Size = UDim2.new(1, -10, 0, 30) btn.Position = UDim2.new(0, 5, 0, fy)
+        local isF = table.find(Config.Friends, p.Name)
+        btn.BackgroundColor3 = isF and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(30, 30, 30)
+        btn.Text = p.Name btn.TextColor3 = Color3.new(1, 1, 1) btn.Font = Enum.Font.Gotham
+        btn.MouseButton1Click:Connect(function()
+            local idx = table.find(Config.Friends, p.Name)
+            if idx then table.remove(Config.Friends, idx) else table.insert(Config.Friends, p.Name) end
+            RefreshFriends()
+        end)
+        fy = fy + 35
+    end
+end
+task.spawn(function() while task.wait(5) do if Gui and Gui.Parent then RefreshFriends() end end end)
+RefreshFriends()
+
+local FOV = Drawing.new("Circle") FOV.Thickness = 1 FOV.NumSides = 64 FOV.Filled = false
+_G.GeminiActive = true
+
+local function GetTarget()
+    local mousePos = UserInputService:GetMouseLocation()
+    
+    if currentTarget then
+        local char = currentTarget.Parent
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        
+        if not char or not hum or hum.Health <= 0 or not Config.Aimbot.Enabled then
+            currentTarget = nil
+        else
+            local vpos, vis = Camera:WorldToViewportPoint(currentTarget.Position)
+            local screenDist = (Vector2.new(vpos.X, vpos.Y) - mousePos).Magnitude
+            local worldDist = (currentTarget.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+            
+            if screenDist < (Config.Aimbot.Fov * 1.5) and worldDist <= Config.Aimbot.MaxDist then
+                return currentTarget
+            else
+                currentTarget = nil 
+            end
+        end
+    end
+
+    local target = nil
+    local minWorldDist = math.huge
+    
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and not table.find(Config.Friends, p.Name) and p.Character then
+            local part = p.Character:FindFirstChild(Config.Aimbot.TargetPart) or p.Character:FindFirstChild("HumanoidRootPart")
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            
+            if part and hum and hum.Health > 0 then
+                local vpos, vis = Camera:WorldToViewportPoint(part.Position)
+                local screenDist = (Vector2.new(vpos.X, vpos.Y) - mousePos).Magnitude
+                local worldDist = (part.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+                
+                if (screenDist < Config.Aimbot.Fov and worldDist <= Config.Aimbot.MaxDist) or screenDist < 15 then
+                    if worldDist < minWorldDist then
+                        minWorldDist = worldDist
+                        target = part
+                    end
+                end
+            end
+        end
+    end
+    
+    currentTarget = target
+    return target
+end
+
+RunService.RenderStepped:Connect(function()
+    if not _G.GeminiActive then FOV.Visible = false return end
+    FOV.Visible = Config.Aimbot.Enabled FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = Config.Visuals.Color
+    
+    if Config.Aimbot.Enabled then
+        local t = GetTarget()
+        if t then 
+            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, t.Position), Config.Aimbot.Smooth) 
+        end
+    else
+        currentTarget = nil 
+    end
+
+    for _, p in pairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        local char = p.Character
+        if char and char:FindFirstChild("Humanoid") then
+            local cham = char:FindFirstChild("GeminiCham")
+            if Config.Visuals.Enabled and Config.Visuals.Chams and char.Humanoid.Health > 0 then
+                if not cham then cham = Instance.new("Highlight", char) cham.Name = "GeminiCham" end
+                local isF = table.find(Config.Friends, p.Name)
+                cham.FillColor = isF and Color3.fromRGB(0, 150, 255) or Config.Visuals.Color
+                cham.Enabled = true
+            elseif cham then cham.Enabled = false end
+        end
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(i, gpe)
+    if not gpe then
+        if i.KeyCode == Config.MenuKey then Main.Visible = not Main.Visible end
+        if i.KeyCode == Config.AimKey then 
+            Config.Aimbot.Enabled = not Config.Aimbot.Enabled 
+            UpdateInterface()
+        end
+    end
+end)
