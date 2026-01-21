@@ -5,7 +5,14 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 local Config = {
-    Aimbot = {Enabled = false, Fov = 150, Smooth = 0.2, TargetPart = "Head", MaxDist = 500},
+    Aimbot = {
+        Enabled = false, 
+        Fov = 150, 
+        Smooth = 0.2, 
+        TargetPart = "Head", 
+        MaxDist = 500,
+        SilentMode = false -- Новая функция: крутится персонаж, а не камера
+    },
     Visuals = {Enabled = true, Chams = true, Color = Color3.fromRGB(180, 100, 255), R = 180, G = 100, B = 255},
     Friends = {List = {}, QuickBind = Enum.KeyCode.Y},
     Misc = {FlyEnabled = false, FlySpeed = 50},
@@ -23,7 +30,7 @@ local listeningForKey = false
 local listeningForFriendKey = false
 
 local Gui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
-Gui.Name = "Gemini_V50_WallFriend"
+Gui.Name = "Gemini_V51_SilentLock"
 Gui.ResetOnSpawn = false
 
 local Main = Instance.new("Frame", Gui)
@@ -102,7 +109,7 @@ local function AddToggle(page, text, tbl, key, y)
     local btn = Instance.new("TextButton", page)
     btn.Size = UDim2.new(1, -10, 0, 40) btn.Position = UDim2.new(0, 5, 0, y) 
     btn.Name = tbl[key] and "Toggle_Active" or "Toggle_Idle"
-    btn.Text = text btn.TextSize = 14 -- Уменьшенный шрифт
+    btn.Text = text btn.TextSize = 13
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
     btn.MouseButton1Click:Connect(function()
         tbl[key] = not tbl[key]
@@ -187,13 +194,14 @@ local function CreateTab(name, y)
     local b = Instance.new("TextButton", Sidebar)
     b.Name = "Tab_Button"
     b.Size = UDim2.new(1, -10, 0, 45) b.Position = UDim2.new(0, 5, 0, y + 5) 
-    b.Text = name:upper() b.TextSize = 14 Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    b.Text = name:upper() b.TextSize = 13 Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
     b.MouseButton1Click:Connect(function() for n, p in pairs(Pages) do p.Visible = (n == name) end end)
 end
 CreateTab("Aimbot", 0) CreateTab("Visuals", 50) CreateTab("Friends", 100) CreateTab("Misc", 150) CreateTab("Settings", 200)
 
 local ay = 0
-ay = AddToggle(Pages.Aimbot, "Aimbot [Z]", Config.Aimbot, "Enabled", ay)
+ay = AddToggle(Pages.Aimbot, "Aimbot Enabled [Z]", Config.Aimbot, "Enabled", ay)
+ay = AddToggle(Pages.Aimbot, "Character Look Only", Config.Aimbot, "SilentMode", ay)
 ay = AddSlider(Pages.Aimbot, "FOV", Config.Aimbot, "Fov", ay, 10, 800)
 ay = AddSlider(Pages.Aimbot, "Smooth", Config.Aimbot, "Smooth", ay, 0.01, 1)
 ay = AddSlider(Pages.Aimbot, "Max Dist", Config.Aimbot, "MaxDist", ay, 50, 2000)
@@ -220,7 +228,7 @@ sy = AddSlider(Pages.Settings, "Text B", Config.Settings, "TextB", sy, 0, 255)
 local mBtn = Instance.new("TextButton", Pages.Settings)
 mBtn.Size = UDim2.new(1, -10, 0, 40) mBtn.Position = UDim2.new(0, 5, 0, sy)
 mBtn.Text = "Menu Key: " .. Config.Settings.MenuKey.Name
-mBtn.TextSize = 14 Instance.new("UICorner", mBtn).CornerRadius = UDim.new(0, 10)
+mBtn.TextSize = 13 Instance.new("UICorner", mBtn).CornerRadius = UDim.new(0, 10)
 mBtn.MouseButton1Click:Connect(function() listeningForKey = true mBtn.Text = "..." end)
 
 local FOV = Drawing.new("Circle")
@@ -237,12 +245,8 @@ RunService.RenderStepped:Connect(function()
     FOV.Visible = Config.Aimbot.Enabled FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = accent
     
     if Config.Aimbot.Enabled then
-        -- Проверка текущей цели (Приоритет)
-        if lockedTarget and not IsValidTarget(lockedTarget) then
-            lockedTarget = nil
-        end
+        if lockedTarget and not IsValidTarget(lockedTarget) then lockedTarget = nil end
 
-        -- Если цели нет, ищем новую
         if not lockedTarget then
             local mouse = UserInputService:GetMouseLocation()
             local bestTarget, minDist = nil, math.huge
@@ -264,8 +268,16 @@ RunService.RenderStepped:Connect(function()
             lockedTarget = bestTarget
         end
 
-        if lockedTarget then 
-            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, lockedTarget.Position), Config.Aimbot.Smooth) 
+        if lockedTarget and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then 
+            local root = LocalPlayer.Character.HumanoidRootPart
+            if Config.Aimbot.SilentMode then
+                -- Режим: Камера статична, персонаж смотрит на цель
+                local targetPos = Vector3.new(lockedTarget.Position.X, root.Position.Y, lockedTarget.Position.Z)
+                root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, targetPos), Config.Aimbot.Smooth)
+            else
+                -- Режим: Камера следит за целью
+                Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, lockedTarget.Position), Config.Aimbot.Smooth)
+            end
         end
     else 
         lockedTarget = nil 
@@ -276,15 +288,10 @@ RunService.RenderStepped:Connect(function()
             local h = p.Character:FindFirstChild("GeminiCham") or Instance.new("Highlight", p.Character)
             h.Name = "GeminiCham"
             h.Enabled = Config.Visuals.Chams
-            h.OutlineTransparency = 0
-            h.FillTransparency = 0.5
-            if lockedTarget and p.Character == lockedTarget.Parent then
-                h.FillColor = Color3.new(1, 0, 0) h.OutlineColor = Color3.new(1,1,1)
-            elseif table.find(Config.Friends.List, p.Name) then
-                h.FillColor = Color3.fromRGB(0, 120, 255) h.OutlineColor = Color3.new(1,1,1)
-            else
-                h.FillColor = accent h.OutlineColor = Color3.new(1,1,1)
-            end
+            h.OutlineTransparency = 0 h.FillTransparency = 0.5
+            if lockedTarget and p.Character == lockedTarget.Parent then h.FillColor = Color3.new(1, 0, 0)
+            elseif table.find(Config.Friends.List, p.Name) then h.FillColor = Color3.fromRGB(0, 120, 255)
+            else h.FillColor = accent end
         end
     end
 
@@ -306,23 +313,16 @@ UserInputService.InputBegan:Connect(function(i, gpe)
         if i.KeyCode == Config.Settings.MenuKey then Main.Visible = not Main.Visible end
         if i.KeyCode == Enum.KeyCode.Z then Config.Aimbot.Enabled = not Config.Aimbot.Enabled UpdateInterface() end
         
-        -- Быстрое добавление (Работает сквозь стены по дистанции курсора на экране)
         if i.KeyCode == Config.Friends.QuickBind then
             local mouse = UserInputService:GetMouseLocation()
-            local friendCandidate, shortestUIdist = nil, 60 -- Радиус 60 пикселей
-            
+            local friendCandidate, shortestUIdist = nil, 60
             for _, p in pairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
                     local vpos, vis = Camera:WorldToViewportPoint(p.Character.HumanoidRootPart.Position)
-                    -- vis не проверяется для "за стенами", но проверяется нахождение в FOV камеры
                     local screenDist = (Vector2.new(vpos.X, vpos.Y) - mouse).Magnitude
-                    if screenDist < shortestUIdist then
-                        shortestUIdist = screenDist
-                        friendCandidate = p
-                    end
+                    if screenDist < shortestUIdist then shortestUIdist = screenDist friendCandidate = p end
                 end
             end
-            
             if friendCandidate then
                 local idx = table.find(Config.Friends.List, friendCandidate.Name)
                 if idx then table.remove(Config.Friends.List, idx) else table.insert(Config.Friends.List, friendCandidate.Name) end
