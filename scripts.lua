@@ -7,7 +7,7 @@ local Camera = workspace.CurrentCamera
 local Config = {
     Aimbot = {Enabled = false, Fov = 150, Smooth = 0.2, TargetPart = "Head", MaxDist = 500},
     Visuals = {Enabled = true, Chams = true, Color = Color3.fromRGB(180, 100, 255), R = 180, G = 100, B = 255},
-    Friends = {},
+    Friends = {List = {}, QuickBind = Enum.KeyCode.Y},
     Misc = {FlyEnabled = false, FlySpeed = 50},
     Settings = {
         MenuTransparency = 0,
@@ -20,9 +20,10 @@ local Config = {
 local lockedTarget = nil
 local flyVelocity = nil
 local listeningForKey = false
+local listeningForFriendKey = false
 
 local Gui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
-Gui.Name = "Gemini_V44_Restored"
+Gui.Name = "Gemini_V50_WallFriend"
 Gui.ResetOnSpawn = false
 
 local Main = Instance.new("Frame", Gui)
@@ -73,6 +74,8 @@ local function UpdateInterface()
     for _, v in pairs(Main:GetDescendants()) do
         if v:IsA("TextLabel") or v:IsA("TextButton") then
             v.TextColor3 = textCol
+            v.Font = Enum.Font.GothamBold
+            v.RichText = true
             if v:IsA("TextButton") then
                 if v.Name == "Toggle_Active" or v.Name == "Part_Selected" then 
                     v.BackgroundColor3 = accentCol
@@ -99,7 +102,7 @@ local function AddToggle(page, text, tbl, key, y)
     local btn = Instance.new("TextButton", page)
     btn.Size = UDim2.new(1, -10, 0, 40) btn.Position = UDim2.new(0, 5, 0, y) 
     btn.Name = tbl[key] and "Toggle_Active" or "Toggle_Idle"
-    btn.Font = Enum.Font.GothamBold btn.Text = text btn.TextSize = 14
+    btn.Text = text btn.TextSize = 14 -- Уменьшенный шрифт
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
     btn.MouseButton1Click:Connect(function()
         tbl[key] = not tbl[key]
@@ -111,9 +114,9 @@ end
 
 local function AddSlider(page, text, tbl, key, y, min, max)
     local tl = Instance.new("TextLabel", page) 
-    tl.Size = UDim2.new(1, -10, 0, 30) tl.Position = UDim2.new(0, 5, 0, y) tl.Text = text .. ": " .. tostring(tbl[key]) 
-    tl.BackgroundTransparency = 1 tl.Font = Enum.Font.GothamBold tl.TextSize = 14 tl.TextXAlignment = Enum.TextXAlignment.Left
-    local sld = Instance.new("TextButton", page) sld.Size = UDim2.new(1, -10, 0, 16) sld.Position = UDim2.new(0, 5, 0, y+32) sld.Text = "" sld.BackgroundColor3 = Color3.fromRGB(45, 45, 45) sld.AutoButtonColor = false
+    tl.Size = UDim2.new(1, -10, 0, 25) tl.Position = UDim2.new(0, 5, 0, y) tl.Text = text .. ": " .. tostring(tbl[key]) 
+    tl.BackgroundTransparency = 1 tl.TextSize = 13 tl.TextXAlignment = Enum.TextXAlignment.Left
+    local sld = Instance.new("TextButton", page) sld.Size = UDim2.new(1, -10, 0, 14) sld.Position = UDim2.new(0, 5, 0, y+28) sld.Text = "" sld.BackgroundColor3 = Color3.fromRGB(45, 45, 45) sld.AutoButtonColor = false
     Instance.new("UICorner", sld).CornerRadius = UDim.new(0, 8)
     local bar = Instance.new("Frame", sld) bar.Name = "Slider_Bar" bar.Size = UDim2.new(math.clamp((tbl[key] - min) / (max - min), 0, 1), 0, 1, 0) bar.BorderSizePixel = 0
     Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 8)
@@ -128,19 +131,19 @@ local function AddSlider(page, text, tbl, key, y, min, max)
             if input.UserInputType == Enum.UserInputType.MouseButton1 then moveConn:Disconnect() releaseConn:Disconnect() end
         end)
     end)
-    return y + 65
+    return y + 60
 end
 
 local function AddPartSelector(page, y)
     local parts = {["Head"]="Head", ["Torso"]="UpperTorso", ["Root"]="HumanoidRootPart", ["Arms"]="RightUpperArm", ["Legs"]="RightUpperLeg"}
     local ly = y
     local label = Instance.new("TextLabel", page)
-    label.Size = UDim2.new(1,-10,0,30) label.Position = UDim2.new(0,5,0,ly) label.Text = "TARGET PART:" label.BackgroundTransparency = 1 label.Font = Enum.Font.GothamBold label.TextSize = 14
-    ly = ly + 35
+    label.Size = UDim2.new(1,-10,0,25) label.Position = UDim2.new(0,5,0,ly) label.Text = "TARGET PART:" label.BackgroundTransparency = 1 label.TextSize = 13
+    ly = ly + 30
     for dName, rName in pairs(parts) do
         local b = Instance.new("TextButton", page)
         b.Size = UDim2.new(1, -10, 0, 35) b.Position = UDim2.new(0, 5, 0, ly)
-        b.Text = dName b.Font = Enum.Font.GothamBold b.TextSize = 14
+        b.Text = dName b.TextSize = 13
         b.Name = (Config.Aimbot.TargetPart == rName) and "Part_Selected" or "Part_Idle"
         Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
         b.MouseButton1Click:Connect(function()
@@ -156,44 +159,44 @@ end
 local function RefreshFriends()
     Pages.Friends:ClearAllChildren()
     local fy = 0
+    local bBtn = Instance.new("TextButton", Pages.Friends)
+    bBtn.Size = UDim2.new(1, -10, 0, 40) bBtn.Position = UDim2.new(0, 5, 0, fy)
+    bBtn.Text = "Quick Friend Bind: " .. Config.Friends.QuickBind.Name
+    bBtn.TextSize = 13 Instance.new("UICorner", bBtn).CornerRadius = UDim.new(0, 10)
+    bBtn.MouseButton1Click:Connect(function() listeningForFriendKey = true bBtn.Text = "..." end)
+    fy = 45
     for _, p in pairs(Players:GetPlayers()) do
         if p == LocalPlayer then continue end
-        local isF = table.find(Config.Friends, p.Name)
+        local isF = table.find(Config.Friends.List, p.Name)
         local btn = Instance.new("TextButton", Pages.Friends)
-        btn.Size = UDim2.new(1, -10, 0, 40) btn.Position = UDim2.new(0, 5, 0, fy)
+        btn.Size = UDim2.new(1, -10, 0, 35) btn.Position = UDim2.new(0, 5, 0, fy)
         btn.Name = isF and "Friend_Active" or "Friend_Idle"
-        btn.Text = p.Name btn.Font = Enum.Font.GothamBold btn.TextSize = 16
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+        btn.Text = p.Name btn.TextSize = 13 Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
         btn.MouseButton1Click:Connect(function()
-            local idx = table.find(Config.Friends, p.Name)
-            if idx then table.remove(Config.Friends, idx) else table.insert(Config.Friends, p.Name) end
+            local idx = table.find(Config.Friends.List, p.Name)
+            if idx then table.remove(Config.Friends.List, idx) else table.insert(Config.Friends.List, p.Name) end
             RefreshFriends()
         end)
-        fy = fy + 45
+        fy = fy + 40
     end
     UpdateInterface()
 end
-Players.PlayerAdded:Connect(RefreshFriends) Players.PlayerRemoving:Connect(RefreshFriends)
+Players.PlayerAdded:Connect(RefreshFriends) Players.PlayerRemoving:Connect(RefreshFriends) RefreshFriends()
 
 local function CreateTab(name, y)
     local b = Instance.new("TextButton", Sidebar)
     b.Name = "Tab_Button"
     b.Size = UDim2.new(1, -10, 0, 45) b.Position = UDim2.new(0, 5, 0, y + 5) 
-    b.Text = name:upper() b.Font = Enum.Font.GothamBold b.TextSize = 13
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-    b.MouseButton1Click:Connect(function() 
-        for n, p in pairs(Pages) do p.Visible = (n == name) end 
-        if name == "Friends" then RefreshFriends() end
-    end)
+    b.Text = name:upper() b.TextSize = 14 Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    b.MouseButton1Click:Connect(function() for n, p in pairs(Pages) do p.Visible = (n == name) end end)
 end
-
 CreateTab("Aimbot", 0) CreateTab("Visuals", 50) CreateTab("Friends", 100) CreateTab("Misc", 150) CreateTab("Settings", 200)
 
 local ay = 0
 ay = AddToggle(Pages.Aimbot, "Aimbot [Z]", Config.Aimbot, "Enabled", ay)
 ay = AddSlider(Pages.Aimbot, "FOV", Config.Aimbot, "Fov", ay, 10, 800)
 ay = AddSlider(Pages.Aimbot, "Smooth", Config.Aimbot, "Smooth", ay, 0.01, 1)
-ay = AddSlider(Pages.Aimbot, "Max Distance", Config.Aimbot, "MaxDist", ay, 10, 2000)
+ay = AddSlider(Pages.Aimbot, "Max Dist", Config.Aimbot, "MaxDist", ay, 50, 2000)
 ay = AddPartSelector(Pages.Aimbot, ay)
 
 local vy = 0
@@ -201,6 +204,10 @@ vy = AddToggle(Pages.Visuals, "Chams", Config.Visuals, "Chams", vy)
 vy = AddSlider(Pages.Visuals, "Accent R", Config.Visuals, "R", vy, 0, 255)
 vy = AddSlider(Pages.Visuals, "Accent G", Config.Visuals, "G", vy, 0, 255)
 vy = AddSlider(Pages.Visuals, "Accent B", Config.Visuals, "B", vy, 0, 255)
+
+local my = 0
+my = AddToggle(Pages.Misc, "Fly", Config.Misc, "FlyEnabled", my)
+my = AddSlider(Pages.Misc, "Fly Speed", Config.Misc, "FlySpeed", my, 10, 300)
 
 local sy = 0
 sy = AddSlider(Pages.Settings, "Transparency", Config.Settings, "MenuTransparency", sy, 0, 1)
@@ -210,81 +217,119 @@ sy = AddSlider(Pages.Settings, "Menu B", Config.Settings, "MenuB", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text R", Config.Settings, "TextR", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text G", Config.Settings, "TextG", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text B", Config.Settings, "TextB", sy, 0, 255)
-
-local function CreateBind(page, y)
-    local btn = Instance.new("TextButton", page)
-    btn.Size = UDim2.new(1, -10, 0, 45) btn.Position = UDim2.new(0, 5, 0, y)
-    btn.Text = "Menu Key: " .. Config.Settings.MenuKey.Name
-    btn.Font = Enum.Font.GothamBold btn.TextSize = 14
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
-    btn.MouseButton1Click:Connect(function() listeningForKey = true btn.Text = "..." end)
-    UserInputService.InputBegan:Connect(function(i)
-        if listeningForKey and i.UserInputType == Enum.UserInputType.Keyboard then
-            Config.Settings.MenuKey = i.KeyCode btn.Text = "Menu Key: " .. i.KeyCode.Name listeningForKey = false
-        end
-    end)
-    return y + 50
-end
-sy = CreateBind(Pages.Settings, sy)
-
-local my = 0
-my = AddToggle(Pages.Misc, "Fly", Config.Misc, "FlyEnabled", my)
-my = AddSlider(Pages.Misc, "Fly Speed", Config.Misc, "FlySpeed", my, 10, 300)
+local mBtn = Instance.new("TextButton", Pages.Settings)
+mBtn.Size = UDim2.new(1, -10, 0, 40) mBtn.Position = UDim2.new(0, 5, 0, sy)
+mBtn.Text = "Menu Key: " .. Config.Settings.MenuKey.Name
+mBtn.TextSize = 14 Instance.new("UICorner", mBtn).CornerRadius = UDim.new(0, 10)
+mBtn.MouseButton1Click:Connect(function() listeningForKey = true mBtn.Text = "..." end)
 
 local FOV = Drawing.new("Circle")
 FOV.Thickness = 4 FOV.NumSides = 60
 
-local function GetNewTarget()
-    local mousePos = UserInputService:GetMouseLocation()
-    local target, minWorldDist = nil, math.huge
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and not table.find(Config.Friends, p.Name) and p.Character then
-            local part = p.Character:FindFirstChild(Config.Aimbot.TargetPart) or p.Character:FindFirstChild("HumanoidRootPart")
-            if part and p.Character:FindFirstChildOfClass("Humanoid") and p.Character:FindFirstChildOfClass("Humanoid").Health > 0 then
-                local vpos, vis = Camera:WorldToViewportPoint(part.Position)
-                if vis then
-                    local screenDist = (Vector2.new(vpos.X, vpos.Y) - mousePos).Magnitude
-                    if screenDist < Config.Aimbot.Fov then
-                        local worldDist = (part.Position - (LocalPlayer.Character and LocalPlayer.Character.HumanoidRootPart.Position or Vector3.zero)).Magnitude
-                        if worldDist < minWorldDist then minWorldDist = worldDist target = part end
-                    end
-                end
-            end
-        end
-    end
-    return target
+local function IsValidTarget(part)
+    if not part or not part.Parent then return false end
+    local hum = part.Parent:FindFirstChildOfClass("Humanoid")
+    return hum and hum.Health > 0
 end
 
 RunService.RenderStepped:Connect(function()
-    FOV.Visible = Config.Aimbot.Enabled FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = Config.Visuals.Color
+    local accent = Color3.fromRGB(Config.Visuals.R, Config.Visuals.G, Config.Visuals.B)
+    FOV.Visible = Config.Aimbot.Enabled FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = accent
+    
     if Config.Aimbot.Enabled then
-        if not (lockedTarget and lockedTarget.Parent and lockedTarget.Parent:FindFirstChildOfClass("Humanoid") and lockedTarget.Parent:FindFirstChildOfClass("Humanoid").Health > 0) then
-            lockedTarget = GetNewTarget()
+        -- Проверка текущей цели (Приоритет)
+        if lockedTarget and not IsValidTarget(lockedTarget) then
+            lockedTarget = nil
         end
-        if lockedTarget then
-            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, lockedTarget.Position), Config.Aimbot.Smooth)
-        end
-    else lockedTarget = nil end
 
-    if Config.Visuals.Chams then
-        for _, p in pairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character then
-                local h = p.Character:FindFirstChild("GeminiCham") or Instance.new("Highlight", p.Character)
-                h.Name = "GeminiCham"
-                h.FillColor = (Config.Aimbot.Enabled and lockedTarget and p.Character == lockedTarget.Parent) and Color3.new(1,0,0) or (table.find(Config.Friends, p.Name) and Color3.fromRGB(0, 120, 255) or Config.Visuals.Color)
-                h.Enabled = true
+        -- Если цели нет, ищем новую
+        if not lockedTarget then
+            local mouse = UserInputService:GetMouseLocation()
+            local bestTarget, minDist = nil, math.huge
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and p.Character and not table.find(Config.Friends.List, p.Name) then
+                    local part = p.Character:FindFirstChild(Config.Aimbot.TargetPart) or p.Character:FindFirstChild("HumanoidRootPart")
+                    if part and p.Character.Humanoid.Health > 0 then
+                        local vpos, vis = Camera:WorldToViewportPoint(part.Position)
+                        if vis then
+                            local d = (Vector2.new(vpos.X, vpos.Y) - mouse).Magnitude
+                            local worldDist = (part.Position - Camera.CFrame.Position).Magnitude
+                            if d < Config.Aimbot.Fov and worldDist < Config.Aimbot.MaxDist and d < minDist then
+                                minDist = d bestTarget = part
+                            end
+                        end
+                    end
+                end
+            end
+            lockedTarget = bestTarget
+        end
+
+        if lockedTarget then 
+            Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, lockedTarget.Position), Config.Aimbot.Smooth) 
+        end
+    else 
+        lockedTarget = nil 
+    end
+
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local h = p.Character:FindFirstChild("GeminiCham") or Instance.new("Highlight", p.Character)
+            h.Name = "GeminiCham"
+            h.Enabled = Config.Visuals.Chams
+            h.OutlineTransparency = 0
+            h.FillTransparency = 0.5
+            if lockedTarget and p.Character == lockedTarget.Parent then
+                h.FillColor = Color3.new(1, 0, 0) h.OutlineColor = Color3.new(1,1,1)
+            elseif table.find(Config.Friends.List, p.Name) then
+                h.FillColor = Color3.fromRGB(0, 120, 255) h.OutlineColor = Color3.new(1,1,1)
+            else
+                h.FillColor = accent h.OutlineColor = Color3.new(1,1,1)
             end
         end
     end
 
-    if Config.Misc.FlyEnabled and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        local root = LocalPlayer.Character.HumanoidRootPart
-        if not flyVelocity then flyVelocity = Instance.new("BodyVelocity", root) flyVelocity.MaxForce = Vector3.new(1,1,1) * 10^6 end
-        local md = LocalPlayer.Character.Humanoid.MoveDirection
+    local char = LocalPlayer.Character
+    if Config.Misc.FlyEnabled and char and char:FindFirstChild("HumanoidRootPart") then
+        local root = char.HumanoidRootPart
+        if not flyVelocity then flyVelocity = Instance.new("BodyVelocity", root) flyVelocity.MaxForce = Vector3.new(1,1,1)*10^6 end
+        local md = char.Humanoid.MoveDirection
         local up = (UserInputService:IsKeyDown(Enum.KeyCode.Space) and 1 or 0) - (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and 1 or 0)
         flyVelocity.Velocity = (md * Config.Misc.FlySpeed) + (Vector3.new(0,1,0) * up * Config.Misc.FlySpeed)
         root.AssemblyLinearVelocity = Vector3.zero
     elseif flyVelocity then flyVelocity:Destroy() flyVelocity = nil end
+end)
+
+UserInputService.InputBegan:Connect(function(i, gpe)
+    if listeningForKey then Config.Settings.MenuKey = i.KeyCode listeningForKey = false UpdateInterface() return end
+    if listeningForFriendKey then Config.Friends.QuickBind = i.KeyCode listeningForFriendKey = false RefreshFriends() return end
+    if not gpe then
+        if i.KeyCode == Config.Settings.MenuKey then Main.Visible = not Main.Visible end
+        if i.KeyCode == Enum.KeyCode.Z then Config.Aimbot.Enabled = not Config.Aimbot.Enabled UpdateInterface() end
+        
+        -- Быстрое добавление (Работает сквозь стены по дистанции курсора на экране)
+        if i.KeyCode == Config.Friends.QuickBind then
+            local mouse = UserInputService:GetMouseLocation()
+            local friendCandidate, shortestUIdist = nil, 60 -- Радиус 60 пикселей
+            
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    local vpos, vis = Camera:WorldToViewportPoint(p.Character.HumanoidRootPart.Position)
+                    -- vis не проверяется для "за стенами", но проверяется нахождение в FOV камеры
+                    local screenDist = (Vector2.new(vpos.X, vpos.Y) - mouse).Magnitude
+                    if screenDist < shortestUIdist then
+                        shortestUIdist = screenDist
+                        friendCandidate = p
+                    end
+                end
+            end
+            
+            if friendCandidate then
+                local idx = table.find(Config.Friends.List, friendCandidate.Name)
+                if idx then table.remove(Config.Friends.List, idx) else table.insert(Config.Friends.List, friendCandidate.Name) end
+                RefreshFriends()
+            end
+        end
+    end
 end)
 
 local dragging, dragInput, dragStart, startPos
@@ -292,12 +337,5 @@ Main.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInput
 Main.InputChanged:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end end)
 UserInputService.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
 RunService.RenderStepped:Connect(function() if dragging and dragInput then local delta = dragInput.Position - dragStart Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y) end end)
-
-UserInputService.InputBegan:Connect(function(i, gpe)
-    if not gpe then
-        if i.KeyCode == Config.Settings.MenuKey then Main.Visible = not Main.Visible end
-        if i.KeyCode == Enum.KeyCode.Z then Config.Aimbot.Enabled = not Config.Aimbot.Enabled UpdateInterface() end
-    end
-end)
 
 UpdateInterface()
