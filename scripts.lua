@@ -11,11 +11,11 @@ local Config = {
         Smooth = 0.2, 
         TargetPart = "Head", 
         MaxDist = 500,
-        SilentMode = false -- Новая функция: крутится персонаж, а не камера
+        SilentMode = false 
     },
     Visuals = {Enabled = true, Chams = true, Color = Color3.fromRGB(180, 100, 255), R = 180, G = 100, B = 255},
     Friends = {List = {}, QuickBind = Enum.KeyCode.Y},
-    Misc = {FlyEnabled = false, FlySpeed = 50},
+    Misc = {FlyEnabled = false, FlySpeed = 50, NoSlow = false}, -- Добавлено NoSlow
     Settings = {
         MenuTransparency = 0,
         MenuR = 15, MenuG = 15, MenuB = 15,
@@ -216,6 +216,7 @@ vy = AddSlider(Pages.Visuals, "Accent B", Config.Visuals, "B", vy, 0, 255)
 local my = 0
 my = AddToggle(Pages.Misc, "Fly", Config.Misc, "FlyEnabled", my)
 my = AddSlider(Pages.Misc, "Fly Speed", Config.Misc, "FlySpeed", my, 10, 300)
+my = AddToggle(Pages.Misc, "No Slowdown", Config.Misc, "NoSlow", my) -- Добавлен UI NoSlow
 
 local sy = 0
 sy = AddSlider(Pages.Settings, "Transparency", Config.Settings, "MenuTransparency", sy, 0, 1)
@@ -271,11 +272,9 @@ RunService.RenderStepped:Connect(function()
         if lockedTarget and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then 
             local root = LocalPlayer.Character.HumanoidRootPart
             if Config.Aimbot.SilentMode then
-                -- Режим: Камера статична, персонаж смотрит на цель
                 local targetPos = Vector3.new(lockedTarget.Position.X, root.Position.Y, lockedTarget.Position.Z)
                 root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, targetPos), Config.Aimbot.Smooth)
             else
-                -- Режим: Камера следит за целью
                 Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, lockedTarget.Position), Config.Aimbot.Smooth)
             end
         end
@@ -296,14 +295,25 @@ RunService.RenderStepped:Connect(function()
     end
 
     local char = LocalPlayer.Character
-    if Config.Misc.FlyEnabled and char and char:FindFirstChild("HumanoidRootPart") then
-        local root = char.HumanoidRootPart
-        if not flyVelocity then flyVelocity = Instance.new("BodyVelocity", root) flyVelocity.MaxForce = Vector3.new(1,1,1)*10^6 end
-        local md = char.Humanoid.MoveDirection
-        local up = (UserInputService:IsKeyDown(Enum.KeyCode.Space) and 1 or 0) - (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and 1 or 0)
-        flyVelocity.Velocity = (md * Config.Misc.FlySpeed) + (Vector3.new(0,1,0) * up * Config.Misc.FlySpeed)
-        root.AssemblyLinearVelocity = Vector3.zero
-    elseif flyVelocity then flyVelocity:Destroy() flyVelocity = nil end
+    if char and char:FindFirstChild("Humanoid") then
+        local hum = char.Humanoid
+        local root = char:FindFirstChild("HumanoidRootPart")
+
+        -- Логика NoSlow (JJS специфик)
+        if Config.Misc.NoSlow then
+            if hum.WalkSpeed < 16 then hum.WalkSpeed = 16 end
+            if hum.JumpPower < 50 then hum.JumpPower = 50 end
+        end
+
+        -- Логика Fly
+        if Config.Misc.FlyEnabled and root then
+            if not flyVelocity then flyVelocity = Instance.new("BodyVelocity", root) flyVelocity.MaxForce = Vector3.new(1,1,1)*10^6 end
+            local md = hum.MoveDirection
+            local up = (UserInputService:IsKeyDown(Enum.KeyCode.Space) and 1 or 0) - (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and 1 or 0)
+            flyVelocity.Velocity = (md * Config.Misc.FlySpeed) + (Vector3.new(0,1,0) * up * Config.Misc.FlySpeed)
+            root.AssemblyLinearVelocity = Vector3.zero
+        elseif flyVelocity then flyVelocity:Destroy() flyVelocity = nil end
+    end
 end)
 
 UserInputService.InputBegan:Connect(function(i, gpe)
