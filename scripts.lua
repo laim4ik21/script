@@ -2,7 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ContextActionService = game:GetService("ContextActionService")
-local Lighting = game:GetService("Lighting") -- Добавлено для шейдеров
+local Lighting = game:GetService("Lighting") 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
@@ -22,9 +22,10 @@ local Config = {
         FlySpeed = 50, 
         NoSlow = false,
         FreeCam = false,
-        FreeCamSpeed = 0.5
+        FreeCamSpeed = 0.5,
+        ClickTP = true -- Новое: Статус клик-тп
     },
-    Shaders = { -- Новая секция
+    Shaders = { 
         ActiveProfile = "None"
     },
     Settings = {
@@ -32,11 +33,22 @@ local Config = {
         MenuR = 15, MenuG = 15, MenuB = 15,
         TextR = 255, TextG = 255, TextB = 255,
         MenuKey = Enum.KeyCode.T,
-        SelectedFont = Enum.Font.GothamBold -- Настройка шрифта
+        SelectedFont = Enum.Font.GothamBold 
     }
 }
 
--- Объекты шейдеров
+-- Создание визуальной метки для ТП
+local TPMarker = Instance.new("Part")
+TPMarker.Name = "TP_Indicator"
+TPMarker.Shape = Enum.PartType.Ball
+TPMarker.Size = Vector3.new(2, 2, 2)
+TPMarker.Color = Color3.fromRGB(255, 0, 0)
+TPMarker.Material = Enum.Material.Neon
+TPMarker.Anchored = true
+TPMarker.CanCollide = false
+TPMarker.Transparency = 1
+TPMarker.Parent = workspace
+
 local Bloom = Lighting:FindFirstChild("GeminiBloom") or Instance.new("BloomEffect", Lighting)
 Bloom.Name = "GeminiBloom"
 local ColorCorr = Lighting:FindFirstChild("GeminiCorr") or Instance.new("ColorCorrectionEffect", Lighting)
@@ -78,12 +90,17 @@ local Pages = {
     Visuals = Instance.new("ScrollingFrame", Container),
     Friends = Instance.new("ScrollingFrame", Container),
     Misc = Instance.new("ScrollingFrame", Container),
-    Shaders = Instance.new("ScrollingFrame", Container), -- Добавлена страница
+    Shaders = Instance.new("ScrollingFrame", Container), 
     Settings = Instance.new("ScrollingFrame", Container)
 }
 
 for name, p in pairs(Pages) do
-    p.Size = UDim2.new(1, 0, 1, 0) p.BackgroundTransparency = 1 p.Visible = (name == "Aimbot") p.ScrollBarThickness = 2 p.CanvasSize = UDim2.new(0, 0, 2.5, 0)
+    p.Size = UDim2.new(1, 0, 1, 0) 
+    p.BackgroundTransparency = 1 
+    p.Visible = (name == "Aimbot") 
+    p.ScrollBarThickness = 2 
+    -- Увеличенный скролл для списка шрифтов
+    p.CanvasSize = (name == "Settings") and UDim2.new(0, 0, 5, 0) or UDim2.new(0, 0, 2.5, 0)
 end
 
 local function UpdateInterface()
@@ -99,7 +116,7 @@ local function UpdateInterface()
     for _, v in pairs(Main:GetDescendants()) do
         if v:IsA("TextLabel") or v:IsA("TextButton") then
             v.TextColor3 = textCol
-            v.Font = Config.Settings.SelectedFont -- Теперь шрифт берется из конфига
+            v.Font = Config.Settings.SelectedFont 
             v.RichText = true
             if v:IsA("TextButton") then
                 if v.Name == "Toggle_Active" or v.Name == "Part_Selected" or v.Name == "Shader_Active" or v.Name == "Font_Active" then 
@@ -244,8 +261,8 @@ my = AddSlider(Pages.Misc, "Fly Speed", Config.Misc, "FlySpeed", my, 10, 300)
 my = AddToggle(Pages.Misc, "Free Cam", Config.Misc, "FreeCam", my)
 my = AddSlider(Pages.Misc, "Cam Speed", Config.Misc, "FreeCamSpeed", my, 0.1, 10)
 my = AddToggle(Pages.Misc, "No Slowdown", Config.Misc, "NoSlow", my)
+my = AddToggle(Pages.Misc, "Control Click TP", Config.Misc, "ClickTP", my) -- Добавлено переключение ТП
 
--- Наполнение вкладки Shaders
 local function AddShaderBtn(name, prof, y)
     local b = Instance.new("TextButton", Pages.Shaders)
     b.Size = UDim2.new(1, -10, 0, 40) b.Position = UDim2.new(0, 5, 0, y)
@@ -273,22 +290,26 @@ sy = AddSlider(Pages.Settings, "Text R", Config.Settings, "TextR", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text G", Config.Settings, "TextG", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text B", Config.Settings, "TextB", sy, 0, 255)
 
--- Выбор шрифтов в Settings
-local function AddFontBtn(name, font, y)
+-- Добавление ВСЕХ шрифтов Studio в настройки
+local function AddFontBtn(font, y)
     local b = Instance.new("TextButton", Pages.Settings)
-    b.Size = UDim2.new(1, -10, 0, 35) b.Position = UDim2.new(0, 5, 0, y)
-    b.Text = "FONT: " .. name b.Name = (Config.Settings.SelectedFont == font) and "Font_Active" or "Font_Idle"
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    b.Size = UDim2.new(1, -10, 0, 30) b.Position = UDim2.new(0, 5, 0, y)
+    b.Text = "FONT: " .. font.Name b.Name = (Config.Settings.SelectedFont == font) and "Font_Active" or "Font_Idle"
+    b.TextSize = 12
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
     b.MouseButton1Click:Connect(function()
         Config.Settings.SelectedFont = font
         for _, v in pairs(Pages.Settings:GetChildren()) do if v.Name:find("Font") then v.Name = "Font_Idle" end end
         b.Name = "Font_Active" UpdateInterface()
     end)
-    return y + 40
+    return y + 35
 end
-sy = AddFontBtn("GOTHAM", Enum.Font.GothamBold, sy)
-sy = AddFontBtn("SCIFI", Enum.Font.SciFi, sy)
-sy = AddFontBtn("ROBOTO", Enum.Font.Roboto, sy)
+
+local allFonts = Enum.Font:GetEnumItems()
+table.sort(allFonts, function(a,b) return a.Name < b.Name end)
+for _, font in pairs(allFonts) do
+    sy = AddFontBtn(font, sy)
+end
 
 local mBtn = Instance.new("TextButton", Pages.Settings)
 mBtn.Size = UDim2.new(1, -10, 0, 40) mBtn.Position = UDim2.new(0, 5, 0, sy)
@@ -305,7 +326,37 @@ local function IsValidTarget(part)
     return hum and hum.Health > 0
 end
 
--- ЛОГИКА FREE CAM
+-- ЛОГИКА CLICK TP (Ctrl + LKM)
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if not gpe and Config.Misc.ClickTP and input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+        local mousePos = UserInputService:GetMouseLocation()
+        local ray = Camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+        local raycastResult = workspace:Raycast(ray.Origin, ray.Direction * 2000)
+        
+        if raycastResult and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local root = LocalPlayer.Character.HumanoidRootPart
+            local targetPos = raycastResult.Position + Vector3.new(0, 3, 0)
+            
+            -- Визуальная метка
+            TPMarker.Position = raycastResult.Position
+            TPMarker.Transparency = 0
+            task.delay(0.5, function() TPMarker.Transparency = 1 end)
+            
+            -- Функция телепорта с проверкой
+            local function TeleportWithCheck()
+                root.CFrame = CFrame.new(targetPos)
+                task.wait(0.1)
+                -- Если дистанция до цели все еще большая (не ТПхнуло), пробуем еще раз
+                if (root.Position - targetPos).Magnitude > 5 then
+                    root.CFrame = CFrame.new(targetPos)
+                end
+            end
+            
+            TeleportWithCheck()
+        end
+    end
+end)
+
 RunService:BindToRenderStep("FreeCam_Logic", Enum.RenderPriority.Camera.Value + 1, function(dt)
     if Config.Misc.FreeCam then
         Camera.CameraType = Enum.CameraType.Scriptable
@@ -335,7 +386,6 @@ RunService:BindToRenderStep("FreeCam_Logic", Enum.RenderPriority.Camera.Value + 
 end)
 
 RunService.RenderStepped:Connect(function()
-    -- Обработка шейдеров
     local prof = Config.Shaders.ActiveProfile
     if prof == "None" then
         Bloom.Enabled = false ColorCorr.Enabled = false
