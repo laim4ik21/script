@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ContextActionService = game:GetService("ContextActionService")
+local Lighting = game:GetService("Lighting") -- Добавлено для шейдеров
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
@@ -23,13 +24,23 @@ local Config = {
         FreeCam = false,
         FreeCamSpeed = 0.5
     },
+    Shaders = { -- Новая секция
+        ActiveProfile = "None"
+    },
     Settings = {
         MenuTransparency = 0,
         MenuR = 15, MenuG = 15, MenuB = 15,
         TextR = 255, TextG = 255, TextB = 255,
-        MenuKey = Enum.KeyCode.T
+        MenuKey = Enum.KeyCode.T,
+        SelectedFont = Enum.Font.GothamBold -- Настройка шрифта
     }
 }
+
+-- Объекты шейдеров
+local Bloom = Lighting:FindFirstChild("GeminiBloom") or Instance.new("BloomEffect", Lighting)
+Bloom.Name = "GeminiBloom"
+local ColorCorr = Lighting:FindFirstChild("GeminiCorr") or Instance.new("ColorCorrectionEffect", Lighting)
+ColorCorr.Name = "GeminiCorr"
 
 local lockedTarget = nil
 local flyVelocity = nil
@@ -67,6 +78,7 @@ local Pages = {
     Visuals = Instance.new("ScrollingFrame", Container),
     Friends = Instance.new("ScrollingFrame", Container),
     Misc = Instance.new("ScrollingFrame", Container),
+    Shaders = Instance.new("ScrollingFrame", Container), -- Добавлена страница
     Settings = Instance.new("ScrollingFrame", Container)
 }
 
@@ -87,10 +99,10 @@ local function UpdateInterface()
     for _, v in pairs(Main:GetDescendants()) do
         if v:IsA("TextLabel") or v:IsA("TextButton") then
             v.TextColor3 = textCol
-            v.Font = Enum.Font.GothamBold
+            v.Font = Config.Settings.SelectedFont -- Теперь шрифт берется из конфига
             v.RichText = true
             if v:IsA("TextButton") then
-                if v.Name == "Toggle_Active" or v.Name == "Part_Selected" then 
+                if v.Name == "Toggle_Active" or v.Name == "Part_Selected" or v.Name == "Shader_Active" or v.Name == "Font_Active" then 
                     v.BackgroundColor3 = accentCol
                     v.BackgroundTransparency = trans
                 elseif v.Name == "Friend_Active" then
@@ -210,7 +222,7 @@ local function CreateTab(name, y)
     b.MouseButton1Click:Connect(function() for n, p in pairs(Pages) do p.Visible = (n == name) end end)
 end
 
-CreateTab("Aimbot", 0) CreateTab("Visuals", 50) CreateTab("Friends", 100) CreateTab("Misc", 150) CreateTab("Settings", 200)
+CreateTab("Aimbot", 0) CreateTab("Visuals", 50) CreateTab("Friends", 100) CreateTab("Misc", 150) CreateTab("Shaders", 200) CreateTab("Settings", 250)
 
 local ay = 0
 ay = AddToggle(Pages.Aimbot, "Aimbot Enabled [Z]", Config.Aimbot, "Enabled", ay)
@@ -233,6 +245,25 @@ my = AddToggle(Pages.Misc, "Free Cam", Config.Misc, "FreeCam", my)
 my = AddSlider(Pages.Misc, "Cam Speed", Config.Misc, "FreeCamSpeed", my, 0.1, 10)
 my = AddToggle(Pages.Misc, "No Slowdown", Config.Misc, "NoSlow", my)
 
+-- Наполнение вкладки Shaders
+local function AddShaderBtn(name, prof, y)
+    local b = Instance.new("TextButton", Pages.Shaders)
+    b.Size = UDim2.new(1, -10, 0, 40) b.Position = UDim2.new(0, 5, 0, y)
+    b.Text = name b.Name = (Config.Shaders.ActiveProfile == prof) and "Shader_Active" or "Shader_Idle"
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
+    b.MouseButton1Click:Connect(function()
+        Config.Shaders.ActiveProfile = prof
+        for _, v in pairs(Pages.Shaders:GetChildren()) do if v:IsA("TextButton") then v.Name = "Shader_Idle" end end
+        b.Name = "Shader_Active" UpdateInterface()
+    end)
+    return y + 45
+end
+local shy = 0
+shy = AddShaderBtn("RESET", "None", shy)
+shy = AddShaderBtn("SPRING V2", "SpringV2", shy)
+shy = AddShaderBtn("SOVA", "SovA", shy)
+shy = AddShaderBtn("VELORA", "Velora", shy)
+
 local sy = 0
 sy = AddSlider(Pages.Settings, "Transparency", Config.Settings, "MenuTransparency", sy, 0, 1)
 sy = AddSlider(Pages.Settings, "Menu R", Config.Settings, "MenuR", sy, 0, 255)
@@ -241,6 +272,24 @@ sy = AddSlider(Pages.Settings, "Menu B", Config.Settings, "MenuB", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text R", Config.Settings, "TextR", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text G", Config.Settings, "TextG", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text B", Config.Settings, "TextB", sy, 0, 255)
+
+-- Выбор шрифтов в Settings
+local function AddFontBtn(name, font, y)
+    local b = Instance.new("TextButton", Pages.Settings)
+    b.Size = UDim2.new(1, -10, 0, 35) b.Position = UDim2.new(0, 5, 0, y)
+    b.Text = "FONT: " .. name b.Name = (Config.Settings.SelectedFont == font) and "Font_Active" or "Font_Idle"
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+    b.MouseButton1Click:Connect(function()
+        Config.Settings.SelectedFont = font
+        for _, v in pairs(Pages.Settings:GetChildren()) do if v.Name:find("Font") then v.Name = "Font_Idle" end end
+        b.Name = "Font_Active" UpdateInterface()
+    end)
+    return y + 40
+end
+sy = AddFontBtn("GOTHAM", Enum.Font.GothamBold, sy)
+sy = AddFontBtn("SCIFI", Enum.Font.SciFi, sy)
+sy = AddFontBtn("ROBOTO", Enum.Font.Roboto, sy)
+
 local mBtn = Instance.new("TextButton", Pages.Settings)
 mBtn.Size = UDim2.new(1, -10, 0, 40) mBtn.Position = UDim2.new(0, 5, 0, sy)
 mBtn.Text = "Menu Key: " .. Config.Settings.MenuKey.Name
@@ -286,6 +335,18 @@ RunService:BindToRenderStep("FreeCam_Logic", Enum.RenderPriority.Camera.Value + 
 end)
 
 RunService.RenderStepped:Connect(function()
+    -- Обработка шейдеров
+    local prof = Config.Shaders.ActiveProfile
+    if prof == "None" then
+        Bloom.Enabled = false ColorCorr.Enabled = false
+    elseif prof == "SpringV2" then
+        Bloom.Enabled = true Bloom.Intensity = 2.5 Bloom.Threshold = 0.5 ColorCorr.Enabled = true ColorCorr.Contrast = 0.1 ColorCorr.Saturation = 0.5
+    elseif prof == "SovA" then
+        Bloom.Enabled = true Bloom.Intensity = 0.6 Bloom.Threshold = 1 ColorCorr.Enabled = true ColorCorr.Contrast = 0.3 ColorCorr.Saturation = -0.2 ColorCorr.TintColor = Color3.fromRGB(220, 240, 255)
+    elseif prof == "Velora" then
+        Bloom.Enabled = true Bloom.Intensity = 1.2 Bloom.Threshold = 0.8 ColorCorr.Enabled = true ColorCorr.Contrast = 0.5 ColorCorr.Saturation = 0.3
+    end
+
     local accent = Color3.fromRGB(Config.Visuals.R, Config.Visuals.G, Config.Visuals.B)
     FOV.Visible = Config.Aimbot.Enabled FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = accent
     
