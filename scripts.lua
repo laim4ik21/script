@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
@@ -15,7 +16,13 @@ local Config = {
     },
     Visuals = {Enabled = true, Chams = true, Color = Color3.fromRGB(180, 100, 255), R = 180, G = 100, B = 255},
     Friends = {List = {}, QuickBind = Enum.KeyCode.Y},
-    Misc = {FlyEnabled = false, FlySpeed = 50, NoSlow = false}, -- Добавлено NoSlow
+    Misc = {
+        FlyEnabled = false, 
+        FlySpeed = 50, 
+        NoSlow = false,
+        FreeCam = false,
+        FreeCamSpeed = 0.5
+    },
     Settings = {
         MenuTransparency = 0,
         MenuR = 15, MenuG = 15, MenuB = 15,
@@ -28,6 +35,7 @@ local lockedTarget = nil
 local flyVelocity = nil
 local listeningForKey = false
 local listeningForFriendKey = false
+local freeCamRotX, freeCamRotY = 0, 0
 
 local Gui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
 Gui.Name = "Gemini_V51_SilentLock"
@@ -71,13 +79,11 @@ local function UpdateInterface()
     local textCol = Color3.fromRGB(Config.Settings.TextR, Config.Settings.TextG, Config.Settings.TextB)
     local accentCol = Color3.fromRGB(Config.Visuals.R, Config.Visuals.G, Config.Visuals.B)
     local trans = Config.Settings.MenuTransparency
-    
     UIStroke.Color = accentCol
     Main.BackgroundColor3 = mainCol
     Main.BackgroundTransparency = trans
     Sidebar.BackgroundColor3 = mainCol
     Sidebar.BackgroundTransparency = trans
-    
     for _, v in pairs(Main:GetDescendants()) do
         if v:IsA("TextLabel") or v:IsA("TextButton") then
             v.TextColor3 = textCol
@@ -98,10 +104,7 @@ local function UpdateInterface()
                 end
             end
         end
-        if v:IsA("Frame") and v.Name == "Slider_Bar" then 
-            v.BackgroundColor3 = accentCol 
-            v.BackgroundTransparency = trans
-        end
+        if v:IsA("Frame") and v.Name == "Slider_Bar" then v.BackgroundColor3 = accentCol v.BackgroundTransparency = trans end
     end
 end
 
@@ -114,6 +117,15 @@ local function AddToggle(page, text, tbl, key, y)
     btn.MouseButton1Click:Connect(function()
         tbl[key] = not tbl[key]
         btn.Name = tbl[key] and "Toggle_Active" or "Toggle_Idle"
+        if key == "FreeCam" then
+            if tbl[key] then
+                Camera.CameraType = Enum.CameraType.Scriptable
+                ContextActionService:BindAction("FreeCamFreeze", function() return Enum.ContextActionResult.Sink end, false, unpack(Enum.PlayerActions:GetEnumItems()))
+            else
+                Camera.CameraType = Enum.CameraType.Custom
+                ContextActionService:UnbindAction("FreeCamFreeze")
+            end
+        end
         UpdateInterface()
     end)
     return y + 45
@@ -197,6 +209,7 @@ local function CreateTab(name, y)
     b.Text = name:upper() b.TextSize = 13 Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
     b.MouseButton1Click:Connect(function() for n, p in pairs(Pages) do p.Visible = (n == name) end end)
 end
+
 CreateTab("Aimbot", 0) CreateTab("Visuals", 50) CreateTab("Friends", 100) CreateTab("Misc", 150) CreateTab("Settings", 200)
 
 local ay = 0
@@ -216,7 +229,9 @@ vy = AddSlider(Pages.Visuals, "Accent B", Config.Visuals, "B", vy, 0, 255)
 local my = 0
 my = AddToggle(Pages.Misc, "Fly", Config.Misc, "FlyEnabled", my)
 my = AddSlider(Pages.Misc, "Fly Speed", Config.Misc, "FlySpeed", my, 10, 300)
-my = AddToggle(Pages.Misc, "No Slowdown", Config.Misc, "NoSlow", my) -- Добавлен UI NoSlow
+my = AddToggle(Pages.Misc, "Free Cam", Config.Misc, "FreeCam", my)
+my = AddSlider(Pages.Misc, "Cam Speed", Config.Misc, "FreeCamSpeed", my, 0.1, 10)
+my = AddToggle(Pages.Misc, "No Slowdown", Config.Misc, "NoSlow", my)
 
 local sy = 0
 sy = AddSlider(Pages.Settings, "Transparency", Config.Settings, "MenuTransparency", sy, 0, 1)
@@ -241,13 +256,41 @@ local function IsValidTarget(part)
     return hum and hum.Health > 0
 end
 
+-- ЛОГИКА FREE CAM
+RunService:BindToRenderStep("FreeCam_Logic", Enum.RenderPriority.Camera.Value + 1, function(dt)
+    if Config.Misc.FreeCam then
+        Camera.CameraType = Enum.CameraType.Scriptable
+        local look = Vector3.new()
+        local right = Vector3.new()
+        local up = Vector3.new()
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then look = Camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then look = -Camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then right = Camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then right = -Camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.E) then up = Vector3.new(0,1,0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Q) then up = Vector3.new(0,-1,0) end
+        local move = (look + right + up)
+        if move.Magnitude > 0 then
+            Camera.CFrame = Camera.CFrame + (move.Unit * Config.Misc.FlySpeed * Config.Misc.FreeCamSpeed * dt)
+        end
+        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+            local delta = UserInputService:GetMouseDelta()
+            freeCamRotX = freeCamRotX - delta.Y * 0.15
+            freeCamRotY = freeCamRotY - delta.X * 0.15
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position) * CFrame.Angles(0, math.rad(freeCamRotY), 0) * CFrame.Angles(math.rad(freeCamRotX), 0, 0)
+            UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+        else
+            UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+        end
+    end
+end)
+
 RunService.RenderStepped:Connect(function()
     local accent = Color3.fromRGB(Config.Visuals.R, Config.Visuals.G, Config.Visuals.B)
     FOV.Visible = Config.Aimbot.Enabled FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = accent
     
     if Config.Aimbot.Enabled then
         if lockedTarget and not IsValidTarget(lockedTarget) then lockedTarget = nil end
-
         if not lockedTarget then
             local mouse = UserInputService:GetMouseLocation()
             local bestTarget, minDist = nil, math.huge
@@ -268,7 +311,6 @@ RunService.RenderStepped:Connect(function()
             end
             lockedTarget = bestTarget
         end
-
         if lockedTarget and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then 
             local root = LocalPlayer.Character.HumanoidRootPart
             if Config.Aimbot.SilentMode then
@@ -298,15 +340,11 @@ RunService.RenderStepped:Connect(function()
     if char and char:FindFirstChild("Humanoid") then
         local hum = char.Humanoid
         local root = char:FindFirstChild("HumanoidRootPart")
-
-        -- Логика NoSlow (JJS специфик)
         if Config.Misc.NoSlow then
             if hum.WalkSpeed < 16 then hum.WalkSpeed = 16 end
             if hum.JumpPower < 50 then hum.JumpPower = 50 end
         end
-
-        -- Логика Fly
-        if Config.Misc.FlyEnabled and root then
+        if Config.Misc.FlyEnabled and root and not Config.Misc.FreeCam then
             if not flyVelocity then flyVelocity = Instance.new("BodyVelocity", root) flyVelocity.MaxForce = Vector3.new(1,1,1)*10^6 end
             local md = hum.MoveDirection
             local up = (UserInputService:IsKeyDown(Enum.KeyCode.Space) and 1 or 0) - (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and 1 or 0)
@@ -322,7 +360,6 @@ UserInputService.InputBegan:Connect(function(i, gpe)
     if not gpe then
         if i.KeyCode == Config.Settings.MenuKey then Main.Visible = not Main.Visible end
         if i.KeyCode == Enum.KeyCode.Z then Config.Aimbot.Enabled = not Config.Aimbot.Enabled UpdateInterface() end
-        
         if i.KeyCode == Config.Friends.QuickBind then
             local mouse = UserInputService:GetMouseLocation()
             local friendCandidate, shortestUIdist = nil, 60
