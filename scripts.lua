@@ -15,7 +15,14 @@ local Config = {
         MaxDist = 500,
         SilentMode = false 
     },
-    Visuals = {Enabled = true, Chams = true, Color = Color3.fromRGB(180, 100, 255), R = 180, G = 100, B = 255},
+    Visuals = {
+        Enabled = true, 
+        Chams = true, 
+        Tracers = false, -- НОВОЕ
+        Names = false,   -- НОВОЕ
+        Color = Color3.fromRGB(180, 100, 255), 
+        R = 180, G = 100, B = 255
+    },
     Friends = {List = {}, QuickBind = Enum.KeyCode.Y},
     Misc = {
         FlyEnabled = false, 
@@ -24,9 +31,9 @@ local Config = {
         FreeCam = false,
         FreeCamSpeed = 0.5,
         ClickTP = true,
-        NoFOV = false,      -- Фиксация FOV камеры
-        DefaultFOV = 70,    -- Значение FOV камеры
-        HideAimbotFov = false -- НОВОЕ: Скрыть круг аимбота
+        NoFOV = false,      -- НОВОЕ (камера)
+        DefaultFOV = 70,    -- НОВОЕ
+        HideAimbotFov = false -- НОВОЕ (скрыть круг)
     },
     Shaders = { 
         ActiveProfile = "None"
@@ -39,6 +46,30 @@ local Config = {
         SelectedFont = Enum.Font.GothamBold 
     }
 }
+
+-- Хранилище для отрисовки (Линии и Текст)
+local ESP_Storage = {}
+
+local function CreateESP(player)
+    if player == LocalPlayer then return end
+    local line = Drawing.new("Line")
+    line.Thickness = 1
+    local text = Drawing.new("Text")
+    text.Size = 14
+    text.Center = true
+    text.Outline = true
+    ESP_Storage[player] = {Tracer = line, NameTag = text}
+end
+
+for _, p in pairs(Players:GetPlayers()) do CreateESP(p) end
+Players.PlayerAdded:Connect(CreateESP)
+Players.PlayerRemoving:Connect(function(p) 
+    if ESP_Storage[p] then 
+        ESP_Storage[p].Tracer:Remove() 
+        ESP_Storage[p].NameTag:Remove() 
+        ESP_Storage[p] = nil 
+    end 
+end)
 
 -- Визуальная метка для ТП
 local TPMarker = Instance.new("Part")
@@ -148,6 +179,15 @@ local function AddToggle(page, text, tbl, key, y)
     btn.MouseButton1Click:Connect(function()
         tbl[key] = not tbl[key]
         btn.Name = tbl[key] and "Toggle_Active" or "Toggle_Idle"
+        if key == "FreeCam" then
+            if tbl[key] then
+                Camera.CameraType = Enum.CameraType.Scriptable
+                ContextActionService:BindAction("FreeCamFreeze", function() return Enum.ContextActionResult.Sink end, false, unpack(Enum.PlayerActions:GetEnumItems()))
+            else
+                Camera.CameraType = Enum.CameraType.Custom
+                ContextActionService:UnbindAction("FreeCamFreeze")
+            end
+        end
         UpdateInterface()
     end)
     return y + 45
@@ -244,6 +284,8 @@ ay = AddPartSelector(Pages.Aimbot, ay)
 
 local vy = 0
 vy = AddToggle(Pages.Visuals, "Chams", Config.Visuals, "Chams", vy)
+vy = AddToggle(Pages.Visuals, "Tracers (Team)", Config.Visuals, "Tracers", vy) -- НОВОЕ
+vy = AddToggle(Pages.Visuals, "Names (Team)", Config.Visuals, "Names", vy)     -- НОВОЕ
 vy = AddSlider(Pages.Visuals, "Accent R", Config.Visuals, "R", vy, 0, 255)
 vy = AddSlider(Pages.Visuals, "Accent G", Config.Visuals, "G", vy, 0, 255)
 vy = AddSlider(Pages.Visuals, "Accent B", Config.Visuals, "B", vy, 0, 255)
@@ -255,9 +297,9 @@ my = AddToggle(Pages.Misc, "Free Cam", Config.Misc, "FreeCam", my)
 my = AddSlider(Pages.Misc, "Cam Speed", Config.Misc, "FreeCamSpeed", my, 0.1, 10)
 my = AddToggle(Pages.Misc, "No Slowdown", Config.Misc, "NoSlow", my)
 my = AddToggle(Pages.Misc, "Control Click TP", Config.Misc, "ClickTP", my)
-my = AddToggle(Pages.Misc, "No FOV Change", Config.Misc, "NoFOV", my) -- Камера
-my = AddSlider(Pages.Misc, "Custom FOV", Config.Misc, "DefaultFOV", my, 30, 120)
-my = AddToggle(Pages.Misc, "Hide Aimbot FOV", Config.Misc, "HideAimbotFov", my) -- АИМБОТ КРУГ
+my = AddToggle(Pages.Misc, "No FOV Change", Config.Misc, "NoFOV", my) -- НОВОЕ
+my = AddSlider(Pages.Misc, "Custom FOV", Config.Misc, "DefaultFOV", my, 30, 120) -- НОВОЕ
+my = AddToggle(Pages.Misc, "Hide Aimbot Circle", Config.Misc, "HideAimbotFov", my) -- НОВОЕ
 
 local function AddShaderBtn(name, prof, y)
     local b = Instance.new("TextButton", Pages.Shaders)
@@ -312,8 +354,8 @@ mBtn.Text = "Menu Key: " .. Config.Settings.MenuKey.Name
 mBtn.TextSize = 13 Instance.new("UICorner", mBtn).CornerRadius = UDim.new(0, 10)
 mBtn.MouseButton1Click:Connect(function() listeningForKey = true mBtn.Text = "..." end)
 
-local FOV_Circle = Drawing.new("Circle")
-FOV_Circle.Thickness = 2 FOV_Circle.NumSides = 60
+local FOV = Drawing.new("Circle")
+FOV.Thickness = 4 FOV.NumSides = 60
 
 local function IsValidTarget(part)
     if not part or not part.Parent then return false end
@@ -321,7 +363,7 @@ local function IsValidTarget(part)
     return hum and hum.Health > 0
 end
 
--- CLICK TP
+-- ЛОГИКА CLICK TP
 UserInputService.InputBegan:Connect(function(input, gpe)
     if not gpe and Config.Misc.ClickTP and input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
         local mousePos = UserInputService:GetMouseLocation()
@@ -343,6 +385,7 @@ UserInputService.InputBegan:Connect(function(input, gpe)
                     root.CFrame = CFrame.new(targetPos)
                 end
             end
+            
             TeleportWithCheck()
         end
     end
@@ -390,21 +433,18 @@ RunService.RenderStepped:Connect(function()
 
     local accent = Color3.fromRGB(Config.Visuals.R, Config.Visuals.G, Config.Visuals.B)
     
-    -- ЛОГИКА КРУГА FOV АИМБОТА
+    -- ЛОГИКА КРУГА FOV
     if Config.Aimbot.Enabled and not Config.Misc.HideAimbotFov then
-        FOV_Circle.Visible = true
-        FOV_Circle.Radius = Config.Aimbot.Fov
-        FOV_Circle.Position = UserInputService:GetMouseLocation()
-        FOV_Circle.Color = accent
+        FOV.Visible = true FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = accent
     else
-        FOV_Circle.Visible = false
+        FOV.Visible = false
     end
     
-    -- ФИКСАЦИЯ FOV КАМЕРЫ
+    -- ЛОГИКА ФИКСАЦИИ FOV КАМЕРЫ
     if Config.Misc.NoFOV then
         Camera.FieldOfView = Config.Misc.DefaultFOV
     end
-
+    
     if Config.Aimbot.Enabled then
         if lockedTarget and not IsValidTarget(lockedTarget) then lockedTarget = nil end
         if not lockedTarget then
@@ -442,13 +482,43 @@ RunService.RenderStepped:Connect(function()
 
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
+            -- ЧАМСЫ
             local h = p.Character:FindFirstChild("GeminiCham") or Instance.new("Highlight", p.Character)
             h.Name = "GeminiCham"
             h.Enabled = Config.Visuals.Chams
             h.OutlineTransparency = 0 h.FillTransparency = 0.5
+            
+            local tColor = p.TeamColor.Color or accent
             if lockedTarget and p.Character == lockedTarget.Parent then h.FillColor = Color3.new(1, 0, 0)
             elseif table.find(Config.Friends.List, p.Name) then h.FillColor = Color3.fromRGB(0, 120, 255)
-            else h.FillColor = accent end
+            else h.FillColor = tColor end
+
+            -- ТРЕЙСЕРЫ И НИКИ
+            local root = p.Character:FindFirstChild("HumanoidRootPart")
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            local data = ESP_Storage[p]
+            if data and root and hum and hum.Health > 0 then
+                local vpos, vis = Camera:WorldToViewportPoint(root.Position)
+                if vis then
+                    if Config.Visuals.Tracers then
+                        data.Tracer.Visible = true
+                        data.Tracer.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+                        data.Tracer.To = Vector2.new(vpos.X, vpos.Y)
+                        data.Tracer.Color = tColor
+                    else data.Tracer.Visible = false end
+
+                    if Config.Visuals.Names then
+                        data.NameTag.Visible = true
+                        data.NameTag.Position = Vector2.new(vpos.X, vpos.Y - 30)
+                        data.NameTag.Text = p.Name
+                        data.NameTag.Color = tColor
+                    else data.NameTag.Visible = false end
+                else
+                    data.Tracer.Visible = false data.NameTag.Visible = false
+                end
+            elseif data then
+                data.Tracer.Visible = false data.NameTag.Visible = false
+            end
         end
     end
 
