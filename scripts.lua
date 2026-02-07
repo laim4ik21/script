@@ -23,7 +23,9 @@ local Config = {
         NoSlow = false,
         FreeCam = false,
         FreeCamSpeed = 0.5,
-        ClickTP = true -- Новое: Статус клик-тп
+        ClickTP = true,
+        NoFOV = false,      -- Новое: Удаление динамического FOV
+        DefaultFOV = 70     -- Новое: Фиксированное значение FOV
     },
     Shaders = { 
         ActiveProfile = "None"
@@ -99,7 +101,6 @@ for name, p in pairs(Pages) do
     p.BackgroundTransparency = 1 
     p.Visible = (name == "Aimbot") 
     p.ScrollBarThickness = 2 
-    -- Увеличенный скролл для списка шрифтов
     p.CanvasSize = (name == "Settings") and UDim2.new(0, 0, 5, 0) or UDim2.new(0, 0, 2.5, 0)
 end
 
@@ -261,7 +262,9 @@ my = AddSlider(Pages.Misc, "Fly Speed", Config.Misc, "FlySpeed", my, 10, 300)
 my = AddToggle(Pages.Misc, "Free Cam", Config.Misc, "FreeCam", my)
 my = AddSlider(Pages.Misc, "Cam Speed", Config.Misc, "FreeCamSpeed", my, 0.1, 10)
 my = AddToggle(Pages.Misc, "No Slowdown", Config.Misc, "NoSlow", my)
-my = AddToggle(Pages.Misc, "Control Click TP", Config.Misc, "ClickTP", my) -- Добавлено переключение ТП
+my = AddToggle(Pages.Misc, "Control Click TP", Config.Misc, "ClickTP", my)
+my = AddToggle(Pages.Misc, "No FOV Change", Config.Misc, "NoFOV", my) -- Новое
+my = AddSlider(Pages.Misc, "Custom FOV", Config.Misc, "DefaultFOV", my, 30, 120) -- Новое
 
 local function AddShaderBtn(name, prof, y)
     local b = Instance.new("TextButton", Pages.Shaders)
@@ -290,7 +293,6 @@ sy = AddSlider(Pages.Settings, "Text R", Config.Settings, "TextR", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text G", Config.Settings, "TextG", sy, 0, 255)
 sy = AddSlider(Pages.Settings, "Text B", Config.Settings, "TextB", sy, 0, 255)
 
--- Добавление ВСЕХ шрифтов Studio в настройки
 local function AddFontBtn(font, y)
     local b = Instance.new("TextButton", Pages.Settings)
     b.Size = UDim2.new(1, -10, 0, 30) b.Position = UDim2.new(0, 5, 0, y)
@@ -326,7 +328,7 @@ local function IsValidTarget(part)
     return hum and hum.Health > 0
 end
 
--- ЛОГИКА CLICK TP (Ctrl + LKM)
+-- ЛОГИКА CLICK TP
 UserInputService.InputBegan:Connect(function(input, gpe)
     if not gpe and Config.Misc.ClickTP and input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
         local mousePos = UserInputService:GetMouseLocation()
@@ -337,21 +339,17 @@ UserInputService.InputBegan:Connect(function(input, gpe)
             local root = LocalPlayer.Character.HumanoidRootPart
             local targetPos = raycastResult.Position + Vector3.new(0, 3, 0)
             
-            -- Визуальная метка
             TPMarker.Position = raycastResult.Position
             TPMarker.Transparency = 0
             task.delay(0.5, function() TPMarker.Transparency = 1 end)
             
-            -- Функция телепорта с проверкой
             local function TeleportWithCheck()
                 root.CFrame = CFrame.new(targetPos)
                 task.wait(0.1)
-                -- Если дистанция до цели все еще большая (не ТПхнуло), пробуем еще раз
                 if (root.Position - targetPos).Magnitude > 5 then
                     root.CFrame = CFrame.new(targetPos)
                 end
             end
-            
             TeleportWithCheck()
         end
     end
@@ -400,6 +398,11 @@ RunService.RenderStepped:Connect(function()
     local accent = Color3.fromRGB(Config.Visuals.R, Config.Visuals.G, Config.Visuals.B)
     FOV.Visible = Config.Aimbot.Enabled FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = accent
     
+    -- ЛОГИКА NO FOV
+    if Config.Misc.NoFOV then
+        Camera.FieldOfView = Config.Misc.DefaultFOV
+    end
+
     if Config.Aimbot.Enabled then
         if lockedTarget and not IsValidTarget(lockedTarget) then lockedTarget = nil end
         if not lockedTarget then
