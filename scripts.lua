@@ -24,8 +24,9 @@ local Config = {
         FreeCam = false,
         FreeCamSpeed = 0.5,
         ClickTP = true,
-        NoFOV = false,      -- Новое: Удаление динамического FOV
-        DefaultFOV = 70     -- Новое: Фиксированное значение FOV
+        NoFOV = false,      -- Фиксация FOV камеры
+        DefaultFOV = 70,    -- Значение FOV камеры
+        HideAimbotFov = false -- НОВОЕ: Скрыть круг аимбота
     },
     Shaders = { 
         ActiveProfile = "None"
@@ -39,7 +40,7 @@ local Config = {
     }
 }
 
--- Создание визуальной метки для ТП
+-- Визуальная метка для ТП
 local TPMarker = Instance.new("Part")
 TPMarker.Name = "TP_Indicator"
 TPMarker.Shape = Enum.PartType.Ball
@@ -147,15 +148,6 @@ local function AddToggle(page, text, tbl, key, y)
     btn.MouseButton1Click:Connect(function()
         tbl[key] = not tbl[key]
         btn.Name = tbl[key] and "Toggle_Active" or "Toggle_Idle"
-        if key == "FreeCam" then
-            if tbl[key] then
-                Camera.CameraType = Enum.CameraType.Scriptable
-                ContextActionService:BindAction("FreeCamFreeze", function() return Enum.ContextActionResult.Sink end, false, unpack(Enum.PlayerActions:GetEnumItems()))
-            else
-                Camera.CameraType = Enum.CameraType.Custom
-                ContextActionService:UnbindAction("FreeCamFreeze")
-            end
-        end
         UpdateInterface()
     end)
     return y + 45
@@ -263,8 +255,9 @@ my = AddToggle(Pages.Misc, "Free Cam", Config.Misc, "FreeCam", my)
 my = AddSlider(Pages.Misc, "Cam Speed", Config.Misc, "FreeCamSpeed", my, 0.1, 10)
 my = AddToggle(Pages.Misc, "No Slowdown", Config.Misc, "NoSlow", my)
 my = AddToggle(Pages.Misc, "Control Click TP", Config.Misc, "ClickTP", my)
-my = AddToggle(Pages.Misc, "No FOV Change", Config.Misc, "NoFOV", my) -- Новое
-my = AddSlider(Pages.Misc, "Custom FOV", Config.Misc, "DefaultFOV", my, 30, 120) -- Новое
+my = AddToggle(Pages.Misc, "No FOV Change", Config.Misc, "NoFOV", my) -- Камера
+my = AddSlider(Pages.Misc, "Custom FOV", Config.Misc, "DefaultFOV", my, 30, 120)
+my = AddToggle(Pages.Misc, "Hide Aimbot FOV", Config.Misc, "HideAimbotFov", my) -- АИМБОТ КРУГ
 
 local function AddShaderBtn(name, prof, y)
     local b = Instance.new("TextButton", Pages.Shaders)
@@ -319,8 +312,8 @@ mBtn.Text = "Menu Key: " .. Config.Settings.MenuKey.Name
 mBtn.TextSize = 13 Instance.new("UICorner", mBtn).CornerRadius = UDim.new(0, 10)
 mBtn.MouseButton1Click:Connect(function() listeningForKey = true mBtn.Text = "..." end)
 
-local FOV = Drawing.new("Circle")
-FOV.Thickness = 4 FOV.NumSides = 60
+local FOV_Circle = Drawing.new("Circle")
+FOV_Circle.Thickness = 2 FOV_Circle.NumSides = 60
 
 local function IsValidTarget(part)
     if not part or not part.Parent then return false end
@@ -328,7 +321,7 @@ local function IsValidTarget(part)
     return hum and hum.Health > 0
 end
 
--- ЛОГИКА CLICK TP
+-- CLICK TP
 UserInputService.InputBegan:Connect(function(input, gpe)
     if not gpe and Config.Misc.ClickTP and input.UserInputType == Enum.UserInputType.MouseButton1 and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
         local mousePos = UserInputService:GetMouseLocation()
@@ -396,9 +389,18 @@ RunService.RenderStepped:Connect(function()
     end
 
     local accent = Color3.fromRGB(Config.Visuals.R, Config.Visuals.G, Config.Visuals.B)
-    FOV.Visible = Config.Aimbot.Enabled FOV.Radius = Config.Aimbot.Fov FOV.Position = UserInputService:GetMouseLocation() FOV.Color = accent
     
-    -- ЛОГИКА NO FOV
+    -- ЛОГИКА КРУГА FOV АИМБОТА
+    if Config.Aimbot.Enabled and not Config.Misc.HideAimbotFov then
+        FOV_Circle.Visible = true
+        FOV_Circle.Radius = Config.Aimbot.Fov
+        FOV_Circle.Position = UserInputService:GetMouseLocation()
+        FOV_Circle.Color = accent
+    else
+        FOV_Circle.Visible = false
+    end
+    
+    -- ФИКСАЦИЯ FOV КАМЕРЫ
     if Config.Misc.NoFOV then
         Camera.FieldOfView = Config.Misc.DefaultFOV
     end
