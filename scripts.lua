@@ -41,6 +41,11 @@ local CFG = {
 	DoorEspDistance  = 500,
 	FlySpeedOwner    = 300,   -- максимум для ников из SpecialNames
 	FlySpeedOther    = 60,    -- обычная скорость для всех остальных
+	TeleportBehind   = 3.5,   -- сколько студов за спиной цели
+	TeleportSpeed    = 55,    -- студов в секунду при плавном перемещении
+	TeleportRange    = 250,   -- макс. дистанция до цели
+	-- Подмена ника в ESP: видят все юзеры скрипта. Настоящий ник/DisplayName в Roblox не меняются.
+	DisplayNames     = { ["x1x1x1x281"] = "КАРОЛЬ💀💀💀💀💀" },
 }
 
 --// ---------------- Модуль: чамсы + ники ----------------
@@ -66,6 +71,23 @@ local function normName(value)
 	name = name:gsub("\208\129", "\209\145")
 
 	return name
+end
+
+-- Ник для ESP: сначала подмена из CFG.DisplayNames, иначе обычный DisplayName
+local function displayNameOf(player)
+	if not player then return "" end
+
+	for _, candidate in ipairs({ player.Name, player.DisplayName }) do
+		local key = normName(candidate)
+		for real, shown in pairs(CFG.DisplayNames) do
+			if key ~= "" and key == normName(real) then
+				return shown
+			end
+		end
+	end
+
+	local shown = player.DisplayName
+	return (shown ~= nil and shown ~= "") and shown or player.Name
 end
 
 -- Проверяем и Name (логин), и DisplayName (видимый ник): у аккаунта они разные
@@ -214,7 +236,7 @@ local function updateNames()
 				local screenPos, onScreen = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1.2, 0))
 				if onScreen then
 					text.Visible = true
-					text.Text = ("%s [%dHP]"):format(player.Name, math.floor(humanoid.Health))
+					text.Text = ("%s [%dHP]"):format(displayNameOf(player), math.floor(humanoid.Health))
 					text.Position = Vector2.new(screenPos.X, screenPos.Y)
 				else
 					text.Visible = false
@@ -287,6 +309,8 @@ function Esp:Stop()
 	end
 end
 
+local Teleport   -- модуль телепорта объявлен ниже: аимботу нужен его флаг busy
+
 --// ---------------- Модуль: аимбот ----------------
 local Aimbot = {
 	enabled = false,
@@ -337,6 +361,9 @@ local function findClosestTarget(centre)
 end
 
 local function aimStep()
+	-- во время телепорта не трогаем CFrame: две записи в один кадр дерутся между собой
+	if Teleport and Teleport.busy then return end
+
 	local centre = getAimPoint()
 
 	if Aimbot.circle then
@@ -939,6 +966,114 @@ function Features.Notify(title, text)
 	Library:Notify({ Title = title, Description = text, Time = 4 })
 end
 
+--// ---------------- Модуль: плавный телепорт за спину ----------------
+Teleport = {
+	busy = false,
+}
+
+local TP_RAY = RaycastParams.new()
+TP_RAY.FilterType = Enum.RaycastFilterType.Exclude
+
+local function teleportTarget()
+	if isValidTarget(Aimbot.target) then
+		return Aimbot.target
+	end
+
+	local camera = GetCamera()
+	local character = LocalPlayer.Character
+	local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+	if not camera or not myRoot then return nil end
+
+	local origin = myRoot.Position
+	local look = camera.CFrame.LookVector
+	local best, bestScore = nil, math.huge
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if isValidTarget(player) then
+			local offset = player.Character.HumanoidRootPart.Position - origin
+			local distance = offset.Magnitude
+
+			if distance <= CFG.TeleportRange and distance > 0.1 then
+				-- ближе к центру взгляда — выше приоритет
+				local score = distance * (1 + (1 - offset.Unit:Dot(look)) * 2)
+				if score < bestScore then
+					best, bestScore = player, score
+				end
+			end
+		end
+	end
+
+	return best
+end
+
+function Teleport:Behind()
+	if self.busy then return end
+
+	local character = LocalPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not humanoid or humanoid.Health <= 0 then
+		return
+	end
+
+	local target = teleportTarget()
+	if not target then
+		Features.Notify("Teleport", "Нет цели в радиусе " .. CFG.TeleportRange .. " studs")
+		return
+	end
+
+	local targetRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+	if not targetRoot then
+		Features.Notify("Teleport", "У цели нет HumanoidRootPart")
+		return
+	end
+
+	local targetPos = targetRoot.Position
+
+	-- персонаж в Roblox смотрит в -Z, значит за спиной смещение в +Z
+	local point = (targetRoot.CFrame * CFrame.new(0, 0, CFG.TeleportBehind)).Position
+	TP_RAY.FilterDescendantsInstances = { character }
+
+	-- ищем пол под точкой приземления, чтобы не зависнуть в воздухе и не провалиться
+	local floor = Workspace:Raycast(point + Vector3.new(0, 4, 0), Vector3.new(0, -12, 0), TP_RAY)
+	if floor then
+		point = Vector3.new(point.X, floor.Position.Y + 3.2, point.Z)
+	end
+
+	local startPos = root.Position
+	local goal = (point - startPos).Magnitude
+	if goal < 0.5 then return end
+
+	local speed = math.clamp(CFG.TeleportSpeed, 10, 400)
+	local stepSize = math.clamp(speed / 60, 0.4, 10)   -- шаг за кадр: больше шаг — выше шанс флага
+
+	self.busy = true
+
+	local travelled = 0
+	while travelled < goal do
+		character = LocalPlayer.Character
+		root = character and character:FindFirstChild("HumanoidRootPart")
+		humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if not root or not humanoid or humanoid.Health <= 0 then break end
+
+		travelled = math.min(travelled + stepSize, goal)
+		local pos = startPos:Lerp(point, travelled / goal)
+
+		root.CFrame = CFrame.lookAt(pos, Vector3.new(targetPos.X, pos.Y, targetPos.Z))
+		-- гасим инерцию: иначе физика дёргает персонажа и его возвращает назад
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+
+		RunService.Heartbeat:Wait()
+	end
+
+	if root and root.Parent then
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+
+	self.busy = false
+end
+
 --// Сборка UI: ошибка в одной секции не должна ронять остальные вкладки
 local BuildErrors = {}
 
@@ -1037,6 +1172,47 @@ AimBox:AddSlider("AimYOffset", {
 		Aimbot.yOffset = value
 	end,
 })
+end)
+
+--// ================= COMBAT / Teleport behind =================
+Build("Combat / Teleport", function()
+local TpBox = Tabs.Combat:AddGroupbox({
+	Side = "Left",
+	Name = "Teleport",
+	IconName = "move",
+})
+
+TpBox:AddButton({
+	Text = "Behind target",
+	Func = function()
+		Teleport:Behind()
+	end,
+})
+
+TpBox:AddLabel("Teleport bind"):AddKeyPicker("TpBind", {
+	Default = "T",
+	Mode = "Press",
+	Text = "Teleport behind",
+	NoUI = false,
+})
+
+-- Штатный хук кейпикера: сработает и на клавишу, и на клик по пикеру
+if Options.TpBind then
+	Options.TpBind:OnClick(function()
+		Teleport:Behind()
+	end)
+end
+
+TpBox:AddSlider("TpSpeed", {
+	Text = "Teleport speed",
+	Default = 55, Min = 15, Max = 200, Rounding = 0,
+	Tooltip = "Студов в секунду: меньше — плавнее, но дольше",
+	Callback = function(value)
+		CFG.TeleportSpeed = value
+	end,
+})
+
+TpBox:AddLabel("Идёт мелкими шагами по кадру (примерно 1 студ за кадр). Если игра всё равно дёргает назад — снизь скорость.", true)
 end)
 
 --// ================= MISC / Interaction =================
