@@ -1004,7 +1004,7 @@ local FlyToggle = MoveBox:AddToggle("Fly", {
 
 -- Бинд на флай: любую клавишу можно назначить в этом пикере
 FlyToggle:AddKeyPicker("FlyBind", {
-	Default = "F",
+	Default = "X",
 	Mode = "Toggle",
 	SyncToggleState = true,
 	Text = "Fly",
