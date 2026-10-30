@@ -840,7 +840,7 @@ Toggles = Library.Toggles
 
 --// ---------------- Window ----------------
 local Window = Library:CreateWindow({
-	Title = "Buffy Hub",
+	Title = "КОЧ ГАЛДА Hub",
 	Footer = "v1.2.0 · no-main build",
 	Icon = 95816097006870,      -- lucide имя иконки или rbxassetid
 	NotifySide = "Right",
