@@ -313,12 +313,13 @@ local Teleport   -- модуль телепорта объявлен ниже: �
 
 --// ---------------- Модуль: аимбот ----------------
 local Aimbot = {
-	enabled = false,
-	fov     = 150,
-	yOffset = 28,
-	target  = nil,
-	circle  = nil,
-	conn    = nil,
+	enabled    = false,
+	fov        = 150,
+	yOffset    = 28,
+	target     = nil,
+	lastTarget = nil,   -- последняя цель: её держит телепорт-следование
+	circle     = nil,
+	conn       = nil,
 }
 
 local function getAimPoint()
@@ -389,6 +390,9 @@ local function aimStep()
 
 	local target = Aimbot.target
 	if not target then return end
+
+	-- залипание: пока цель жива, аим её не меняет; запоминаем её для телепорта
+	Aimbot.lastTarget = target
 
 	local character = LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -910,37 +914,6 @@ local SaveManager  = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))(
 Options = Library.Options
 Toggles = Library.Toggles
 
---// ---------------- Тема меню ----------------
--- background 121/50/0 · main 187/78/0 · accent 177/58/0
-local THEME = {
-	BackgroundColor = Color3.fromRGB(121, 50, 0),
-	MainColor       = Color3.fromRGB(187, 78, 0),
-	AccentColor     = Color3.fromRGB(177, 58, 0),
-	OutlineColor    = Color3.fromRGB(150, 66, 0),   -- рамки и разделители
-	FontColor       = Color3.fromRGB(255, 255, 255),
-}
-
--- Ставится до CreateWindow: элементы берут цвета из Library.Scheme при создании.
--- Повторный вызов перекрашивает уже готовый интерфейс.
-local function ApplyTheme()
-	for key, color in pairs(THEME) do
-		Library.Scheme[key] = color
-
-		local option = Library.Options[key]
-		if option and option.SetValue then
-			option:SetValue(color)
-		end
-	end
-
-	if Library.UpdateColorsUsingRegistry then
-		pcall(function()
-			Library:UpdateColorsUsingRegistry()
-		end)
-	end
-end
-
-ApplyTheme()
-
 --// ---------------- Window ----------------
 local Window = Library:CreateWindow({
 	Title = "Buffy Hub",
@@ -968,15 +941,21 @@ end
 
 --// ---------------- Модуль: плавный телепорт за спину ----------------
 Teleport = {
-	busy = false,
+	busy      = false,
+	following = false,
 }
 
 local TP_RAY = RaycastParams.new()
 TP_RAY.FilterType = Enum.RaycastFilterType.Exclude
 
 local function teleportTarget()
+	-- приоритет: текущая цель аима, затем последняя, с которой он работал
 	if isValidTarget(Aimbot.target) then
 		return Aimbot.target
+	end
+
+	if isValidTarget(Aimbot.lastTarget) then
+		return Aimbot.lastTarget
 	end
 
 	local camera = GetCamera()
@@ -1072,6 +1051,65 @@ function Teleport:Behind()
 	end
 
 	self.busy = false
+end
+
+-- Точка за спиной цели с поправкой на пол
+local function desiredPoint(target)
+	local targetRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+	local character = LocalPlayer.Character
+	if not targetRoot or not character then return nil end
+
+	TP_RAY.FilterDescendantsInstances = { character }
+
+	local point = (targetRoot.CFrame * CFrame.new(0, 0, CFG.TeleportBehind)).Position
+	local floor = Workspace:Raycast(point + Vector3.new(0, 4, 0), Vector3.new(0, -12, 0), TP_RAY)
+	if floor then
+		point = Vector3.new(point.X, floor.Position.Y + 3.2, point.Z)
+	end
+
+	return point
+end
+
+-- Непрерывное следование: каждый кадр шаг к точке за спиной, пока тоггл включён
+function Teleport:SetFollowing(state)
+	self.following = state
+
+	-- корутина прошлого запуска могла ещё не завершиться — тогда второй цикл не нужен
+	local running = self.followConn and coroutine.status(self.followConn) ~= "dead"
+	if not state or running then return end
+
+	self.followConn = task.spawn(function()
+		while Teleport.following do
+			local character = LocalPlayer.Character
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+
+			if root and humanoid and humanoid.Health > 0 then
+				local target = teleportTarget()
+				local point = target and desiredPoint(target)
+
+				if point then
+					local delta = point - root.Position
+					local distance = delta.Magnitude
+
+					if distance > 1.2 then
+						local speed = math.clamp(CFG.TeleportSpeed, 10, 400)
+						local stepSize = math.clamp(speed / 60, 0.4, 10)
+						local nextPos = root.Position + delta.Unit * math.min(stepSize, distance)
+
+						-- трогаем только позицию: поворот остаётся аиму, чтобы можно было стрелять на ходу
+						root.CFrame = CFrame.new(nextPos) * root.CFrame.Rotation
+						root.AssemblyLinearVelocity = Vector3.zero
+						root.AssemblyAngularVelocity = Vector3.zero
+					end
+				end
+			end
+
+			RunService.Heartbeat:Wait()
+		end
+
+		Teleport.followConn = nil
+	end)
 end
 
 --// Сборка UI: ошибка в одной секции не должна ронять остальные вкладки
@@ -1187,6 +1225,21 @@ TpBox:AddButton({
 	Func = function()
 		Teleport:Behind()
 	end,
+})
+
+TpBox:AddToggle("TpFollow", {
+	Text = "Follow behind",
+	Default = false,
+	Tooltip = "Летит за спиной цели (последняя цель аима), пока не выключишь",
+	Callback = function(state)
+		Teleport:SetFollowing(state)
+	end,
+}):AddKeyPicker("TpFollowBind", {
+	Default = "Y",
+	Mode = "Toggle",
+	SyncToggleState = true,
+	Text = "Follow behind",
+	NoUI = false,
 })
 
 TpBox:AddLabel("Teleport bind"):AddKeyPicker("TpBind", {
@@ -1322,9 +1375,6 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 ThemeManager:ApplyToTab(Tabs.Settings)
 
 SaveManager:LoadAutoloadConfig()
-
--- Сохранённый конфиг мог вернуть старые цвета — накатываем свои ещё раз
-ApplyTheme()
 
 --// ---------------- Отчёт о сборке ----------------
 if #BuildErrors > 0 then
