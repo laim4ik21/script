@@ -27,7 +27,7 @@ local Options, Toggles
 
 --// ---------------- Config ----------------
 local CFG = {
-	SpecialNames     = { "redix31", "x1x1x1x281", "КАРОЛЬ", "КАРОЛЬ💀💀💀💀💀" },  -- ники с зелёным цветом + полной привилегией
+	SpecialNames     = { "redix31", "x1x1x1x281" },  -- ники с зелёным цветом + полной привилегией
 	ChamsColor       = Color3.fromRGB(255, 0, 0),    -- цвет чамсов
 	SpecialColor     = Color3.fromRGB(0, 255, 0),    -- цвет чамсов особого игрока
 	OutlineColor     = Color3.fromRGB(255, 255, 255),
@@ -45,7 +45,8 @@ local CFG = {
 	TeleportSpeed    = 55,    -- студов в секунду при плавном перемещении
 	TeleportRange    = 250,   -- макс. дистанция до цели
 	-- Подмена ника в ESP: видят все юзеры скрипта. Настоящий ник/DisplayName в Roblox не меняются.
-	DisplayNames     = { ["x1x1x1x281"] = "КАРОЛЬ💀💀💀💀💀" },
+	-- Пример: DisplayNames = { ["x1x1x1x281"] = "новый ник" }
+	DisplayNames     = {},
 }
 
 --// ---------------- Модуль: чамсы + ники ----------------
@@ -316,6 +317,8 @@ local Aimbot = {
 	enabled    = false,
 	fov        = 150,
 	yOffset    = 28,
+	smoothness = 45,    -- 0 = мгновенное прилипание, 95 = очень плавно
+	strength   = 100,   -- сколько процентов пути к цели доводит аим
 	target     = nil,
 	lastTarget = nil,   -- последняя цель: её держит телепорт-следование
 	circle     = nil,
@@ -400,7 +403,16 @@ local function aimStep()
 
 	local targetPos = target.Character.HumanoidRootPart.Position
 	local lookPos = Vector3.new(targetPos.X, root.Position.Y, targetPos.Z)
-	root.CFrame = CFrame.new(root.Position, lookPos)
+	-- плавность: при smoothness = 0 ведёт себя как раньше, мгновенно
+	local alpha = math.clamp(1 - Aimbot.smoothness / 100, 0.02, 1)
+
+	-- сила считается от взгляда камеры (мыши), а не от текущего CFrame: иначе
+	-- поворот каждый кадр подтягивался бы до полного наведения сам по себе
+	local camera = GetCamera()
+	local basePoint = camera and (camera.CFrame.Position + camera.CFrame.LookVector * 50) or lookPos
+	local aimPoint = basePoint:Lerp(lookPos, Aimbot.strength / 100)
+
+	root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, aimPoint), alpha)
 end
 
 function Aimbot:Init()
@@ -1189,7 +1201,7 @@ AimBox:AddToggle("AimEnabled", {
 
 AimBox:AddLabel("Aim key"):AddKeyPicker("AimKey", {
 	Default = "E",
-	Mode = "Hold",           -- зажал клавишу — аим работает
+	Mode = "Toggle",         -- нажал — аим включён, нажал ещё раз — выключен
 	Text = "Aim assist",
 	NoUI = false,
 })
@@ -1208,6 +1220,24 @@ AimBox:AddSlider("AimYOffset", {
 	Tooltip = "Смещение под верхнюю панель Roblox",
 	Callback = function(value)
 		Aimbot.yOffset = value
+	end,
+})
+
+AimBox:AddSlider("AimSmooth", {
+	Text = "Smoothness",
+	Default = 45, Min = 0, Max = 95, Rounding = 0,
+	Tooltip = "0 — мгновенное прилипание, больше — плавнее",
+	Callback = function(value)
+		Aimbot.smoothness = value
+	end,
+})
+
+AimBox:AddSlider("AimStrength", {
+	Text = "Strength",
+	Default = 100, Min = 10, Max = 100, Rounding = 0,
+	Tooltip = "Сколько процентов пути к цели доводит аим",
+	Callback = function(value)
+		Aimbot.strength = value
 	end,
 })
 end)
