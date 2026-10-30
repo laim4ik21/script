@@ -27,7 +27,7 @@ local Options, Toggles
 
 --// ---------------- Config ----------------
 local CFG = {
-	SpecialName      = "redix31",                    -- ник с особым цветом
+	SpecialNames     = { "redix31", "x1x1x1x281" },  -- ники с зелёным цветом
 	ChamsColor       = Color3.fromRGB(255, 0, 0),    -- цвет чамсов
 	SpecialColor     = Color3.fromRGB(0, 255, 0),    -- цвет чамсов особого игрока
 	OutlineColor     = Color3.fromRGB(255, 255, 255),
@@ -39,6 +39,8 @@ local CFG = {
 	LockedColor      = Color3.fromRGB(255, 50, 50),
 	PromptDistance   = 50,                           -- MaxActivationDistance в режиме instant
 	DoorEspDistance  = 500,
+	FlySpeedOwner    = 300,   -- максимум для ников из SpecialNames
+	FlySpeedOther    = 60,    -- обычная скорость для всех остальных
 }
 
 --// ---------------- Модуль: чамсы + ники ----------------
@@ -49,8 +51,22 @@ local Esp = {
 	conns    = {},
 }
 
+local function isSpecial(player)
+	local name = string.lower(player.Name)
+	for _, special in ipairs(CFG.SpecialNames) do
+		if name == string.lower(special) then
+			return true
+		end
+	end
+	return false
+end
+
+-- Привилегия: полный доступ только у ников из CFG.SpecialNames
+local IS_OWNER = isSpecial(LocalPlayer)
+local FLY_SPEED_MAX = IS_OWNER and CFG.FlySpeedOwner or CFG.FlySpeedOther
+
 local function playerColor(player)
-	return (player.Name == CFG.SpecialName) and CFG.SpecialColor or CFG.ChamsColor
+	return isSpecial(player) and CFG.SpecialColor or CFG.ChamsColor
 end
 
 local function ensureEntry(player)
@@ -65,7 +81,7 @@ local function ensureEntry(player)
 		text.Size = 16
 		text.Center = true
 		text.Outline = true
-		text.Color = (player.Name == CFG.SpecialName) and CFG.SpecialColor or CFG.NameTextColor
+		text.Color = isSpecial(player) and CFG.SpecialColor or CFG.NameTextColor
 		entry.drawing = text
 	end
 
@@ -601,10 +617,13 @@ end
 
 local function refreshDoorLabels()
 	for prompt, entry in pairs(Prompts.cache) do
-		local visual = entry.visual
-		local target = entry.target
+		-- pcall: удалённая дверь/промпт иначе убивает весь цикл обновления (метка «замирала»)
+		pcall(function()
+			local visual, target = entry.visual, entry.target
+			if not visual or not target or not visual.label or not visual.label.Parent then
+				return
+			end
 
-		if prompt.Parent and visual and target and visual.label and visual.label.Parent then
 			local text, color = doorStatus(entry, prompt, target)
 			if visual.label.Text ~= text then
 				visual.label.Text = text
@@ -612,7 +631,7 @@ local function refreshDoorLabels()
 			if visual.label.TextColor3 ~= color then
 				visual.label.TextColor3 = color
 			end
-		end
+		end)
 	end
 end
 
@@ -692,7 +711,7 @@ function Prompts:Start()
 		while Prompts.active do
 			task.wait(0.25)
 			if Prompts.esp then
-				refreshDoorLabels()
+				pcall(refreshDoorLabels)
 			end
 		end
 	end)
@@ -816,7 +835,7 @@ function Fly:SetEnabled(state)
 end
 
 function Fly:SetSpeed(value)
-	self.speed = value
+	self.speed = math.clamp(value, 1, FLY_SPEED_MAX)
 end
 
 function Fly:Stop()
@@ -840,9 +859,9 @@ Toggles = Library.Toggles
 
 --// ---------------- Window ----------------
 local Window = Library:CreateWindow({
-	Title = "КОЧ ГАЛДА Hub",
-	Footer = "v1.2.0 · СПЕРМА",
-	Icon = 95816097006870,      -- lucide имя иконки или rbxassetid
+	Title = "Buffy Hub",
+	Footer = "v1.2.0 · no-main build",
+	Icon = 6031075931,          -- иконка окна (глаз), можно вписать другой rbxassetid
 	NotifySide = "Right",
 	ShowCustomCursor = false,   -- обычный курсор Roblox
 	Center = true,
@@ -902,7 +921,7 @@ PlayersBox:AddToggle("NameESP", {
 })
 
 PlayersBox:AddDivider()
-PlayersBox:AddLabel(("Особый цвет для: %s"):format(CFG.SpecialName), true)
+PlayersBox:AddLabel(("Особый цвет для: %s"):format(table.concat(CFG.SpecialNames, ", ")), true)
 
 --// ================= VISUALS / Doors =================
 local DoorsBox = Tabs.Visuals:AddGroupbox({
@@ -1012,8 +1031,8 @@ FlyToggle:AddKeyPicker("FlyBind", {
 })
 
 MoveBox:AddSlider("FlySpeed", {
-	Text = "Fly speed",
-	Default = 50, Min = 10, Max = 300, Rounding = 0,
+	Text = IS_OWNER and "Fly speed" or ("Fly speed (макс. %d)"):format(FLY_SPEED_MAX),
+	Default = math.min(50, FLY_SPEED_MAX), Min = 10, Max = FLY_SPEED_MAX, Rounding = 0,
 	Callback = function(value)
 		Fly:SetSpeed(value)
 	end,
