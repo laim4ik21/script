@@ -1242,20 +1242,6 @@ TpBox:AddToggle("TpFollow", {
 	NoUI = false,
 })
 
-TpBox:AddLabel("Teleport bind"):AddKeyPicker("TpBind", {
-	Default = "T",
-	Mode = "Press",
-	Text = "Teleport behind",
-	NoUI = false,
-})
-
--- Штатный хук кейпикера: сработает и на клавишу, и на клик по пикеру
-if Options.TpBind then
-	Options.TpBind:OnClick(function()
-		Teleport:Behind()
-	end)
-end
-
 TpBox:AddSlider("TpSpeed", {
 	Text = "Teleport speed",
 	Default = 55, Min = 15, Max = 200, Rounding = 0,
