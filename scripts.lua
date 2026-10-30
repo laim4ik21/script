@@ -841,7 +841,7 @@ Toggles = Library.Toggles
 --// ---------------- Window ----------------
 local Window = Library:CreateWindow({
 	Title = "КОЧ ГАЛДА Hub",
-	Footer = "v1.2.0 · no-main build",
+	Footer = "v1.2.0 · СПЕРМА",
 	Icon = 95816097006870,      -- lucide имя иконки или rbxassetid
 	NotifySide = "Right",
 	ShowCustomCursor = false,   -- обычный курсор Roblox
