@@ -27,7 +27,7 @@ local Options, Toggles
 
 --// ---------------- Config ----------------
 local CFG = {
-	SpecialNames     = { "redix31", "x1x1x1x281" },  -- ники с зелёным цветом
+	SpecialNames     = { "redix31", "x1x1x1x281", "КАРОЛЬ", "КАРОЛЬ💀💀💀💀💀" },  -- ники с зелёным цветом + полной привилегией
 	ChamsColor       = Color3.fromRGB(255, 0, 0),    -- цвет чамсов
 	SpecialColor     = Color3.fromRGB(0, 255, 0),    -- цвет чамсов особого игрока
 	OutlineColor     = Color3.fromRGB(255, 255, 255),
@@ -51,13 +51,39 @@ local Esp = {
 	conns    = {},
 }
 
+-- Ник в нижний регистр: string.lower не трогает кириллицу, поэтому руками (А-Я -> а-я, Ё -> ё)
+local function normName(value)
+	if type(value) ~= "string" then return "" end
+
+	local name = value:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+	name = name:gsub("\208([\144-\175])", function(b)
+		local n = b:byte()
+		if n < 160 then
+			return "\208" .. string.char(n + 32)
+		end
+		return "\209" .. string.char(n - 32)
+	end)
+	name = name:gsub("\208\129", "\209\145")
+
+	return name
+end
+
+-- Проверяем и Name (логин), и DisplayName (видимый ник): у аккаунта они разные
 local function isSpecial(player)
-	local name = string.lower(player.Name)
+	if not player then return false end
+
+	local candidates = { player.Name, player.DisplayName }
 	for _, special in ipairs(CFG.SpecialNames) do
-		if name == string.lower(special) then
-			return true
+		local target = normName(special)
+		if target ~= "" then
+			for _, candidate in ipairs(candidates) do
+				if normName(candidate) == target then
+					return true
+				end
+			end
 		end
 	end
+
 	return false
 end
 
@@ -857,6 +883,37 @@ local SaveManager  = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))(
 Options = Library.Options
 Toggles = Library.Toggles
 
+--// ---------------- Тема меню ----------------
+-- background 121/50/0 · main 187/78/0 · accent 177/58/0
+local THEME = {
+	BackgroundColor = Color3.fromRGB(121, 50, 0),
+	MainColor       = Color3.fromRGB(187, 78, 0),
+	AccentColor     = Color3.fromRGB(177, 58, 0),
+	OutlineColor    = Color3.fromRGB(150, 66, 0),   -- рамки и разделители
+	FontColor       = Color3.fromRGB(255, 255, 255),
+}
+
+-- Ставится до CreateWindow: элементы берут цвета из Library.Scheme при создании.
+-- Повторный вызов перекрашивает уже готовый интерфейс.
+local function ApplyTheme()
+	for key, color in pairs(THEME) do
+		Library.Scheme[key] = color
+
+		local option = Library.Options[key]
+		if option and option.SetValue then
+			option:SetValue(color)
+		end
+	end
+
+	if Library.UpdateColorsUsingRegistry then
+		pcall(function()
+			Library:UpdateColorsUsingRegistry()
+		end)
+	end
+end
+
+ApplyTheme()
+
 --// ---------------- Window ----------------
 local Window = Library:CreateWindow({
 	Title = "Buffy Hub",
@@ -1089,6 +1146,9 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 ThemeManager:ApplyToTab(Tabs.Settings)
 
 SaveManager:LoadAutoloadConfig()
+
+-- Сохранённый конфиг мог вернуть старые цвета — накатываем свои ещё раз
+ApplyTheme()
 
 --// ---------------- Отчёт о сборке ----------------
 if #BuildErrors > 0 then
