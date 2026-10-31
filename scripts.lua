@@ -12,6 +12,13 @@ local Players          = game:GetService("Players")
 local Workspace        = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local RunService       = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+
+-- в обычном Roblox такого сервиса нет, он есть только в исполнителях
+local okVim, vimService = pcall(function()
+	return game:GetService("VirtualInputManager")
+end)
+local VirtualInputManager = okVim and vimService or nil
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -1124,6 +1131,244 @@ function Teleport:SetFollowing(state)
 	end)
 end
 
+--// ---------------- Модуль: авто-фарм дверей ----------------
+local Farm = {
+	running  = false,
+	phase    = "IDLE",
+	speed    = 120,
+	range    = 2000,     -- в каком радиусе вообще искать цели
+	visited  = {},       -- [модель] = true, сбрасывается при перезапуске
+	cache    = {},       -- [модель] = BasePart
+	waypoints = {},
+	wpIndex  = 1,
+	target   = nil,
+	timer    = 0,
+	stuck    = 0,
+	openTimer = 0,
+	cacheTimer = 0,
+	lastPos  = Vector3.zero,
+	conn     = nil,
+}
+
+local FARM_KEYWORDS = { "door", "trick", "treat" }
+local FARM_PATH = {
+	AgentRadius = 2,
+	AgentHeight = 5,
+	AgentCanJump = true,
+	AgentCanClimb = true,
+	WaypointSpacing = 6,
+	Costs = { Water = 20, Climb = 5 },
+}
+
+local function isFarmTarget(name)
+	name = string.lower(name)
+	for _, word in ipairs(FARM_KEYWORDS) do
+		if string.find(name, word, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+-- Полный обход Workspace раз в полсекунды, а не каждый кадр
+local function refreshFarmCache()
+	local list = {}
+
+	for _, object in ipairs(Workspace:GetDescendants()) do
+		if object:IsA("ProximityPrompt") or object:IsA("ClickDetector") then
+			local model = object:FindFirstAncestorOfClass("Model")
+			if model and not model:FindFirstChildWhichIsA("Humanoid") and isFarmTarget(model.Name) then
+				local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+				if part then
+					list[model] = part
+				end
+			end
+		end
+	end
+
+	Farm.cache = list
+end
+
+local function nearestFarmDoor(root)
+	local best, bestPart, bestDist = nil, nil, math.huge
+
+	for model, part in pairs(Farm.cache) do
+		if part.Parent and not Farm.visited[model] then
+			local distance = (part.Position - root.Position).Magnitude
+			if distance <= Farm.range and distance < bestDist then
+				best, bestPart, bestDist = model, part, distance
+			end
+		end
+	end
+
+	return best, bestPart
+end
+
+local function buildFarmPath(root, part)
+	local path = PathfindingService:CreatePath(FARM_PATH)
+	local ok = pcall(function()
+		path:ComputeAsync(root.Position, part.Position)
+	end)
+
+	if ok and path.Status == Enum.PathStatus.Success then
+		Farm.waypoints = path:GetWaypoints()
+		Farm.wpIndex = 1
+		return true
+	end
+
+	return false
+end
+
+local function openFarmDoor(model)
+	for _, object in ipairs(model:GetDescendants()) do
+		if object:IsA("ProximityPrompt") then
+			if fireproximityprompt then
+				pcall(fireproximityprompt, object)
+			elseif VirtualInputManager then
+				pcall(function()
+					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+				end)
+			end
+		elseif object:IsA("ClickDetector") and fireclickdetector then
+			pcall(fireclickdetector, object)
+		end
+	end
+end
+
+local function farmStep(root, point, dt)
+	local delta = point - root.Position
+	local distance = delta.Magnitude
+	if distance < 0.1 then return distance end
+
+	local step = math.min(math.clamp(Farm.speed, 10, 400) * dt, distance)
+	local nextPos = root.Position + delta.Unit * step
+
+	root.CFrame = CFrame.lookAt(nextPos, nextPos + delta.Unit)
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+
+	return distance
+end
+
+function Farm:SetRunning(state)
+	self.running = state
+	self.phase = "IDLE"
+	self.target = nil
+	self.waypoints = {}
+	self.wpIndex = 1
+	self.timer, self.stuck, self.openTimer = 0, 0, 0
+	self.lastPos = Vector3.zero
+
+	if state then
+		self.visited = {}
+		self.cacheTimer = 0
+	end
+
+	return state
+end
+
+function Farm:Init()
+	if self.conn then return end
+
+	self.conn = RunService.Heartbeat:Connect(function(dt)
+		if not Farm.running then return end
+
+		local character = LocalPlayer.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not root or not humanoid or humanoid.Health <= 0 then return end
+
+		Farm.cacheTimer = Farm.cacheTimer - dt
+		if Farm.cacheTimer <= 0 then
+			Farm.cacheTimer = 0.5
+			refreshFarmCache()
+		end
+
+		-- анти-застревание: позиция почти не меняется — значит куда-то упёрлись
+		if (root.Position - Farm.lastPos).Magnitude < 0.6 then
+			Farm.stuck = Farm.stuck + dt
+		else
+			Farm.stuck = 0
+		end
+		Farm.lastPos = root.Position
+
+		if Farm.phase == "IDLE" then
+			local model, part = nearestFarmDoor(root)
+			if model then
+				Farm.target = model
+				Farm.timer = 0
+				Farm.phase = buildFarmPath(root, part) and "PATH" or "DIRECT"
+			end
+
+		elseif Farm.phase == "PATH" then
+			Farm.timer = Farm.timer + dt
+
+			local waypoint = Farm.waypoints[Farm.wpIndex]
+			if not waypoint then
+				Farm.phase = "DIRECT"
+				Farm.timer = 0
+			else
+				local remaining = farmStep(root, waypoint.Position, dt)
+				if remaining < 4 then
+					if waypoint.Action == Enum.PathWaypointAction.Jump then
+						humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+					end
+					Farm.wpIndex = Farm.wpIndex + 1
+				end
+			end
+
+			-- долго идём или застряли — летим напрямую, а не сбрасываемся в IDLE
+			if (Farm.timer > 6 or Farm.stuck > 1.5) and Farm.wpIndex < #Farm.waypoints then
+				Farm.phase = "DIRECT"
+				Farm.timer = 0
+			end
+
+		elseif Farm.phase == "DIRECT" then
+			Farm.timer = Farm.timer + dt
+
+			local model = Farm.target
+			local part = model and (model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true))
+
+			if not part or not part.Parent then
+				Farm.phase = "IDLE"
+			elseif (part.Position - root.Position).Magnitude < 6 then
+				Farm.phase = "OPEN"
+				Farm.openTimer = 0.4
+			elseif Farm.timer > 8 then
+				-- не долетели (например, за стеной) — помечаем и берём следующую
+				Farm.visited[model] = true
+				Farm.phase = "IDLE"
+			else
+				farmStep(root, part.Position, dt)
+			end
+
+		elseif Farm.phase == "OPEN" then
+			Farm.openTimer = Farm.openTimer - dt
+			if Farm.openTimer <= 0 then
+				if Farm.target then
+					openFarmDoor(Farm.target)
+					Farm.visited[Farm.target] = true
+				end
+
+				Farm.target = nil
+				Farm.waypoints = {}
+				Farm.wpIndex = 1
+				Farm.phase = "IDLE"
+			end
+		end
+	end)
+end
+
+function Farm:Stop()
+	if self.conn then
+		self.conn:Disconnect()
+		self.conn = nil
+	end
+
+	self.running = false
+	self.phase = "IDLE"
+end
+
 --// Сборка UI: ошибка в одной секции не должна ронять остальные вкладки
 local BuildErrors = {}
 
@@ -1339,6 +1584,50 @@ MoveBox:AddSlider("FlySpeed", {
 		Fly:SetSpeed(value)
 	end,
 })
+
+--// ================= MISC / Auto farm =================
+local FarmBox = Tabs.Misc:AddGroupbox({
+	Side = "Right",
+	Name = "Auto farm",
+	IconName = "route",
+})
+
+local FarmToggle = FarmBox:AddToggle("AutoFarm", {
+	Text = "Auto farm doors",
+	Default = false,
+	Tooltip = "Ищет двери и сундуки, летит по пути и открывает промпты",
+	Callback = function(state)
+		Farm:SetRunning(state)
+	end,
+})
+
+FarmToggle:AddKeyPicker("FarmBind", {
+	Default = "Z",
+	Mode = "Toggle",
+	SyncToggleState = true,
+	Text = "Auto farm",
+	NoUI = false,
+})
+
+FarmBox:AddSlider("FarmSpeed", {
+	Text = "Farm speed",
+	Default = 120, Min = 40, Max = 400, Rounding = 0,
+	Tooltip = "Студов в секунду",
+	Callback = function(value)
+		Farm.speed = value
+	end,
+})
+
+FarmBox:AddSlider("FarmRange", {
+	Text = "Search radius",
+	Default = 2000, Min = 200, Max = 10000, Rounding = 0,
+	Tooltip = "В каком радиусе искать цели",
+	Callback = function(value)
+		Farm.range = value
+	end,
+})
+
+FarmBox:AddLabel("Путь строится PathfindingService, при неудаче — прямой полёт. Посещённые двери запоминаются до перезапуска тоггла.", true)
 end)
 
 --// ================= UI Settings =================
@@ -1410,6 +1699,7 @@ Esp:Start()
 Prompts:Start()
 Aimbot:Init()
 Fly:Init()
+Farm:Init()
 
 Esp:SetChams(true)
 Esp:SetNames(true)
@@ -1420,6 +1710,7 @@ Library:OnUnload(function()
 	Esp:Stop()
 	Aimbot:Stop()
 	Prompts:Stop()
+	Farm:Stop()
 	Fly:Stop()
 	print("Unloaded")
 end)
