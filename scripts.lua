@@ -34,9 +34,7 @@ local Options, Toggles
 
 --// ---------------- Config ----------------
 local CFG = {
-	SpecialNames     = { "redix31", "x1x1x1x281" },  -- ники с зелёным цветом + полной привилегией
 	ChamsColor       = Color3.fromRGB(255, 0, 0),    -- цвет чамсов
-	SpecialColor     = Color3.fromRGB(0, 255, 0),    -- цвет чамсов особого игрока
 	OutlineColor     = Color3.fromRGB(255, 255, 255),
 	FillTransparency = 0.5,
 	NameTextColor    = Color3.fromRGB(255, 255, 255),
@@ -46,8 +44,7 @@ local CFG = {
 	LockedColor      = Color3.fromRGB(255, 50, 50),
 	PromptDistance   = 50,                           -- MaxActivationDistance в режиме instant
 	DoorEspDistance  = 500,
-	FlySpeedOwner    = 300,   -- максимум для ников из SpecialNames
-	FlySpeedOther    = 60,    -- обычная скорость для всех остальных
+	FlySpeedMax      = 100,   -- максимальная скорость флая, одна для всех
 	TeleportBehind   = 3.5,   -- сколько студов за спиной цели
 	TeleportSpeed    = 55,    -- студов в секунду при плавном перемещении
 	TeleportRange    = 250,   -- макс. дистанция до цели
@@ -98,32 +95,8 @@ local function displayNameOf(player)
 	return (shown ~= nil and shown ~= "") and shown or player.Name
 end
 
--- Проверяем и Name (логин), и DisplayName (видимый ник): у аккаунта они разные
-local function isSpecial(player)
-	if not player then return false end
-
-	local candidates = { player.Name, player.DisplayName }
-	for _, special in ipairs(CFG.SpecialNames) do
-		local target = normName(special)
-		if target ~= "" then
-			for _, candidate in ipairs(candidates) do
-				if normName(candidate) == target then
-					return true
-				end
-			end
-		end
-	end
-
-	return false
-end
-
--- Привилегия: полный доступ только у ников из CFG.SpecialNames
-local IS_OWNER = isSpecial(LocalPlayer)
-local FLY_SPEED_MAX = IS_OWNER and CFG.FlySpeedOwner or CFG.FlySpeedOther
-
-local function playerColor(player)
-	return isSpecial(player) and CFG.SpecialColor or CFG.ChamsColor
-end
+-- Ограничение скорости одно для всех, никаких привилегий по нику
+local FLY_SPEED_MAX = CFG.FlySpeedMax
 
 local function ensureEntry(player)
 	local entry = Esp.registry[player]
@@ -137,7 +110,7 @@ local function ensureEntry(player)
 		text.Size = 16
 		text.Center = true
 		text.Outline = true
-		text.Color = isSpecial(player) and CFG.SpecialColor or CFG.NameTextColor
+		text.Color = CFG.NameTextColor
 		entry.drawing = text
 	end
 
@@ -165,7 +138,7 @@ local function setupHighlight(entry)
 	local highlight = Instance.new("Highlight")
 	highlight.Name = "ObsidianChams"
 	highlight.Adornee = character
-	highlight.FillColor = playerColor(entry.player)
+	highlight.FillColor = CFG.ChamsColor
 	highlight.OutlineColor = CFG.OutlineColor
 	highlight.FillTransparency = CFG.FillTransparency
 	highlight.OutlineTransparency = 0
@@ -1146,6 +1119,10 @@ local Farm = {
 	stuck    = 0,
 	openTimer = 0,
 	cacheTimer = 0,
+	sightTimer = 0,
+	repathTimer = 0,
+	retargetTimer = 0,
+	clear    = false,
 	lastPos  = Vector3.zero,
 	conn     = nil,
 }
@@ -1191,17 +1168,30 @@ end
 
 local function nearestFarmDoor(root)
 	local best, bestPart, bestDist = nil, nil, math.huge
+	local origin = root.Position
+	local rangeSq = Farm.range * Farm.range
 
 	for model, part in pairs(Farm.cache) do
 		if part.Parent and not Farm.visited[model] then
-			local distance = (part.Position - root.Position).Magnitude
-			if distance <= Farm.range and distance < bestDist then
-				best, bestPart, bestDist = model, part, distance
+			local offset = part.Position - origin
+			local distanceSq = offset.X * offset.X + offset.Y * offset.Y + offset.Z * offset.Z
+			if distanceSq <= rangeSq and distanceSq < bestDist then
+				best, bestPart, bestDist = model, part, distanceSq
 			end
 		end
 	end
 
 	return best, bestPart
+end
+
+-- Прямая видимость двери: если по линии ничего нет, петли pathfinding не нужны
+local function clearSight(from, to, ignoreModel)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { LocalPlayer.Character, ignoreModel }
+	params.IgnoreWater = true
+
+	return Workspace:Raycast(from, to - from, params) == nil
 end
 
 local function buildFarmPath(root, part)
@@ -1279,8 +1269,9 @@ function Farm:Init()
 		if not root or not humanoid or humanoid.Health <= 0 then return end
 
 		Farm.cacheTimer = Farm.cacheTimer - dt
-		if Farm.cacheTimer <= 0 then
-			Farm.cacheTimer = 0.5
+		-- обход Workspace дорогой: обновляем кэш только когда стоим без цели
+		if Farm.phase == "IDLE" and Farm.cacheTimer <= 0 then
+			Farm.cacheTimer = 1
 			refreshFarmCache()
 		end
 
@@ -1292,38 +1283,20 @@ function Farm:Init()
 		end
 		Farm.lastPos = root.Position
 
+		Farm.sightTimer = Farm.sightTimer - dt
+		Farm.repathTimer = Farm.repathTimer - dt
+		Farm.retargetTimer = Farm.retargetTimer - dt
+
 		if Farm.phase == "IDLE" then
 			local model, part = nearestFarmDoor(root)
 			if model then
 				Farm.target = model
-				Farm.timer = 0
+				Farm.timer, Farm.stuck = 0, 0
+				Farm.waypoints, Farm.wpIndex = {}, 1
 				Farm.phase = buildFarmPath(root, part) and "PATH" or "DIRECT"
 			end
 
-		elseif Farm.phase == "PATH" then
-			Farm.timer = Farm.timer + dt
-
-			local waypoint = Farm.waypoints[Farm.wpIndex]
-			if not waypoint then
-				Farm.phase = "DIRECT"
-				Farm.timer = 0
-			else
-				local remaining = farmStep(root, waypoint.Position, dt)
-				if remaining < 4 then
-					if waypoint.Action == Enum.PathWaypointAction.Jump then
-						humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-					end
-					Farm.wpIndex = Farm.wpIndex + 1
-				end
-			end
-
-			-- долго идём или застряли — летим напрямую, а не сбрасываемся в IDLE
-			if (Farm.timer > 6 or Farm.stuck > 1.5) and Farm.wpIndex < #Farm.waypoints then
-				Farm.phase = "DIRECT"
-				Farm.timer = 0
-			end
-
-		elseif Farm.phase == "DIRECT" then
+		elseif Farm.phase == "PATH" or Farm.phase == "DIRECT" then
 			Farm.timer = Farm.timer + dt
 
 			local model = Farm.target
@@ -1331,15 +1304,79 @@ function Farm:Init()
 
 			if not part or not part.Parent then
 				Farm.phase = "IDLE"
-			elseif (part.Position - root.Position).Magnitude < 6 then
-				Farm.phase = "OPEN"
-				Farm.openTimer = 0.4
-			elseif Farm.timer > 8 then
-				-- не долетели (например, за стеной) — помечаем и берём следующую
-				Farm.visited[model] = true
-				Farm.phase = "IDLE"
 			else
-				farmStep(root, part.Position, dt)
+				local distance = (part.Position - root.Position).Magnitude
+
+				if distance < 6 then
+					Farm.phase = "OPEN"
+					Farm.openTimer = 0.4
+				else
+					-- раз в 0.25 с смотрим, видно ли дверь напрямую
+					if Farm.sightTimer <= 0 then
+						Farm.sightTimer = 0.25
+						Farm.clear = clearSight(root.Position, part.Position, model)
+					end
+
+					if Farm.clear then
+						-- прямая свободна: летим по прямой, крюки вокруг блоков не нужны
+						if Farm.phase ~= "DIRECT" then
+							Farm.phase = "DIRECT"
+							Farm.timer = 0
+						end
+					elseif Farm.phase == "DIRECT" then
+						-- стена на линии: пробуем вернуться на путь, а не лететь сквозь неё
+						if Farm.repathTimer <= 0 then
+							Farm.repathTimer = 2
+							if buildFarmPath(root, part) then
+								Farm.phase = "PATH"
+								Farm.timer = 0
+							end
+						end
+					end
+
+					if Farm.phase == "PATH" then
+						local waypoint = Farm.waypoints[Farm.wpIndex]
+						if waypoint then
+							if farmStep(root, waypoint.Position, dt) < 4 then
+								if waypoint.Action == Enum.PathWaypointAction.Jump then
+									humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+								end
+								Farm.wpIndex = Farm.wpIndex + 1
+							end
+						elseif not buildFarmPath(root, part) then
+							Farm.phase = "DIRECT"
+						end
+
+						-- упёрлись в угол: сразу новый путь, а не ждём таймаут
+						if Farm.stuck > 1.2 then
+							Farm.stuck = 0
+							if not buildFarmPath(root, part) then
+								Farm.phase = "DIRECT"
+							end
+						end
+					else
+						farmStep(root, part.Position, dt)
+					end
+
+					-- рядом появилась другая дверь — переключаемся, чтобы не лететь назад
+					if Farm.retargetTimer <= 0 then
+						Farm.retargetTimer = 2
+						local nearModel, nearPart = nearestFarmDoor(root)
+						if nearModel and nearModel ~= model then
+							if (nearPart.Position - root.Position).Magnitude < distance * 0.5 then
+								Farm.target = nearModel
+								Farm.timer, Farm.stuck = 0, 0
+								Farm.phase = buildFarmPath(root, nearPart) and "PATH" or "DIRECT"
+							end
+						end
+					end
+
+					-- сдаёмся только если не доехали за двойное расчётное время
+					if Farm.target == model and Farm.timer > (distance / math.max(Farm.speed, 10)) * 2.5 + 6 then
+						Farm.visited[model] = true
+						Farm.phase = "IDLE"
+					end
+				end
 			end
 
 		elseif Farm.phase == "OPEN" then
@@ -1407,8 +1444,6 @@ PlayersBox:AddToggle("NameESP", {
 	end,
 })
 
-PlayersBox:AddDivider()
-PlayersBox:AddLabel(("Особый цвет для: %s"):format(table.concat(CFG.SpecialNames, ", ")), true)
 
 --// ================= VISUALS / Doors =================
 local DoorsBox = Tabs.Visuals:AddGroupbox({
@@ -1578,7 +1613,7 @@ FlyToggle:AddKeyPicker("FlyBind", {
 })
 
 MoveBox:AddSlider("FlySpeed", {
-	Text = IS_OWNER and "Fly speed" or ("Fly speed (макс. %d)"):format(FLY_SPEED_MAX),
+	Text = ("Fly speed (макс. %d)"):format(FLY_SPEED_MAX),
 	Default = math.min(50, FLY_SPEED_MAX), Min = 10, Max = FLY_SPEED_MAX, Rounding = 0,
 	Callback = function(value)
 		Fly:SetSpeed(value)
@@ -1602,7 +1637,7 @@ local FarmToggle = FarmBox:AddToggle("AutoFarm", {
 })
 
 FarmToggle:AddKeyPicker("FarmBind", {
-	Default = "Z",
+	Default = "K",
 	Mode = "Toggle",
 	SyncToggleState = true,
 	Text = "Auto farm",
@@ -1627,7 +1662,7 @@ FarmBox:AddSlider("FarmRange", {
 	end,
 })
 
-FarmBox:AddLabel("Путь строится PathfindingService, при неудаче — прямой полёт. Посещённые двери запоминаются до перезапуска тоггла.", true)
+FarmBox:AddLabel("Клик по бинду — назначить свою клавишу. Путь строится PathfindingService, при прямой видимости — полёт по прямой. Посещённые двери запоминаются до перезапуска тоггла.", true)
 end)
 
 --// ================= UI Settings =================
