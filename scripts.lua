@@ -13,6 +13,7 @@ local Workspace        = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local RunService       = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
 
 -- в обычном Roblox такого сервиса нет, он есть только в исполнителях
 local okVim, vimService = pcall(function()
@@ -1019,6 +1020,204 @@ function Clean:Stop()
 	end
 end
 
+--// ---------------- Модуль: аудит клиента ----------------
+-- Только чтение: ничего не вызываем и не меняем. Смотрим, какие фреймворки
+-- сидят на клиенте и какие ремоуты торчат наружу.
+local Audit = {
+	-- слова, по которым имя ремоута выглядит опасным
+	riskyWords = {
+		"admin", "grant", "give", "ban", "kick", "cash", "money",
+		"coin", "reward", "buy", "purchase", "damage", "heal",
+		"redeem", "promo", "command", "cmd", "exec", "panel",
+	},
+	-- флаги, которые игра может вешать на игрока
+	flagWords = {
+		"admin", "permission", "rank", "owner", "vip", "role",
+		"donat", "premium", "moderator",
+	},
+	maxScan = 8000,   -- предел объектов за один проход
+}
+
+local FRAMEWORKS = {
+	{ key = "Knit",       words = { "knit", "knitclient" } },
+	{ key = "TopbarPlus", words = { "topbarplus" } },
+	{ key = "HD Admin",   words = { "hd admin", "hdadmin", "hdadminsetup" } },
+}
+
+local CAPABILITIES = {
+	"getconnections", "hookfunction", "hookmetamethod", "getgc",
+	"getrawmetatable", "fireproximityprompt", "fireclickdetector",
+	"firetouchinterest", "setclipboard", "request",
+}
+
+local function matchWord(name, words)
+	local lower = string.lower(tostring(name))
+	for _, word in ipairs(words) do
+		if string.find(lower, word, 1, true) then
+			return word
+		end
+	end
+	return nil
+end
+
+function Audit.riskyWord(name)
+	return matchWord(name, Audit.riskyWords)
+end
+
+-- Ремоуты в ReplicatedStorage + имена, которые стоит проверить руками.
+function Audit.scanRemotes()
+	local result = { events = 0, functions = 0, risky = {}, scanned = 0 }
+
+	local okList, list = pcall(function()
+		return ReplicatedStorage:GetDescendants()
+	end)
+	if not okList or not list then return result end
+
+	for _, item in ipairs(list) do
+		if result.scanned >= Audit.maxScan then break end
+		result.scanned = result.scanned + 1
+
+		local isEvent = item:IsA("RemoteEvent")
+		local isFunc  = item:IsA("RemoteFunction")
+		if isEvent then result.events = result.events + 1 end
+		if isFunc  then result.functions = result.functions + 1 end
+
+		if isEvent or isFunc then
+			local word = Audit.riskyWord(item.Name)
+			if word then
+				table.insert(result.risky, ("[%s] %s"):format(word, item:GetFullName()))
+			end
+		end
+	end
+
+	return result
+end
+
+-- Загруженные фреймворки: ищем по именам в ReplicatedStorage и PlayerGui.
+function Audit.scanFrameworks()
+	local found = {}
+	local seen  = {}
+	local roots = { ReplicatedStorage }
+	local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+	if playerGui then
+		table.insert(roots, playerGui)
+	end
+
+	for _, root in ipairs(roots) do
+		if root then
+			local okList, list = pcall(function()
+				return root:GetDescendants()
+			end)
+			if okList and list then
+				for _, item in ipairs(list) do
+					for _, proto in ipairs(FRAMEWORKS) do
+						if not seen[proto.key] and matchWord(item.Name, proto.words) then
+							seen[proto.key] = true
+							local version = item:GetAttribute("Version") or item:GetAttribute("VERSION")
+							if version then
+								table.insert(found, proto.key .. " (" .. tostring(version) .. ")")
+							else
+								table.insert(found, proto.key)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return found
+end
+
+-- Флаги на локальном игроке: атрибуты и Value-объекты с «правами» в имени.
+function Audit.scanPlayerFlags()
+	local flags = {}
+
+	local okAttrs, attrs = pcall(function()
+		return LocalPlayer:GetAttributes()
+	end)
+	if okAttrs and attrs then
+		for name, value in pairs(attrs) do
+			if matchWord(name, Audit.flagWords) then
+				table.insert(flags, ("атрибут %s = %s"):format(name, tostring(value)))
+			end
+		end
+	end
+
+	local okKids, kids = pcall(function()
+		return LocalPlayer:GetChildren()
+	end)
+	if okKids and kids then
+		for _, child in ipairs(kids) do
+			if child:IsA("ValueBase") and matchWord(child.Name, Audit.flagWords) then
+				table.insert(flags, ("%s = %s"):format(child.Name, tostring(child.Value)))
+			end
+		end
+	end
+
+	return flags
+end
+
+-- Что даёт исполнитель: от этого зависит, что вообще можно проверить.
+function Audit.scanCapabilities()
+	local list = {}
+	for _, name in ipairs(CAPABILITIES) do
+		if _G[name] then
+			table.insert(list, name)
+		end
+	end
+	return list
+end
+
+function Audit.report()
+	local remotes    = Audit.scanRemotes()
+	local frameworks = Audit.scanFrameworks()
+	local flags      = Audit.scanPlayerFlags()
+	local caps       = Audit.scanCapabilities()
+	local total      = remotes.events + remotes.functions
+
+	print("===== АУДИТ КЛИЕНТА =====")
+	print(("Фреймворки: %s"):format(#frameworks > 0 and table.concat(frameworks, ", ") or "не найдены"))
+	print(("Ремоуты: %d (Event %d / Function %d), просмотрено объектов: %d"):format(
+		total, remotes.events, remotes.functions, remotes.scanned
+	))
+
+	if #remotes.risky > 0 then
+		print(("Опасные имена (%d):"):format(#remotes.risky))
+		for index, line in ipairs(remotes.risky) do
+			if index > 25 then
+				print(("  ... и ещё %d"):format(#remotes.risky - 25))
+				break
+			end
+			print("  " .. line)
+		end
+	else
+		print("Опасных имён среди ремоутов нет")
+	end
+
+	if #flags > 0 then
+		print(("Флаги на игроке (%d):"):format(#flags))
+		for _, line in ipairs(flags) do
+			print("  " .. line)
+		end
+	else
+		print("Флагов на локальном игроке нет")
+	end
+
+	print(("Возможности исполнителя: %s"):format(
+		#caps > 0 and table.concat(caps, ", ") or "только стандартный Roblox"
+	))
+	print("=========================")
+
+	return {
+		remotes = remotes,
+		frameworks = frameworks,
+		flags = flags,
+		caps = caps,
+		total = total,
+	}
+end
+
 --// ---------------- Библиотека ----------------
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
@@ -1759,6 +1958,25 @@ InteractBox:AddLabel(
 	"При выключении тоггла исходные значения промптов (HoldDuration / дистанция / LineOfSight) восстанавливаются.",
 	true
 )
+
+--// ================= MISC / Audit =================
+local AuditBox = Tabs.Misc:AddGroupbox({
+	Side = "Left",
+	Name = "Audit",
+	IconName = "shield",
+})
+
+AuditBox:AddButton({
+	Text = "Скан клиента",
+	Func = function()
+		local report = Audit.report()
+		Features.Notify("Аудит", ("Ремоутов: %d, опасных имён: %d, флагов: %d. Отчёт в консоли."):format(
+			report.total, #report.remotes.risky, #report.flags
+		))
+	end,
+})
+
+AuditBox:AddLabel("Knit, TopbarPlus, HD Admin — только поиск по именам в ReplicatedStorage и PlayerGui. Ремоуты считаются, но не вызываются; опасные имена — повод проверить руками. Флаги — атрибуты и Value на игроке (admin, vip, rank и т.п.).", true)
 
 --// ================= MISC / Movement =================
 local MoveBox = Tabs.Misc:AddGroupbox({
