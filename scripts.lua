@@ -44,7 +44,6 @@ local CFG = {
 	LockedColor      = Color3.fromRGB(255, 50, 50),
 	PromptDistance   = 50,                           -- MaxActivationDistance в режиме instant
 	DoorEspDistance  = 500,
-	TimerColor       = Color3.fromRGB(255, 200, 60),  -- цвет отсчёта таймера дверей
 	FlySpeedMax      = 100,   -- максимальная скорость флая, одна для всех
 	TeleportBehind   = 3.5,   -- сколько студов за спиной цели
 	TeleportSpeed    = 55,    -- студов в секунду при плавном перемещении
@@ -792,141 +791,6 @@ function Prompts:Stop()
 	table.clear(self.cache)
 end
 
---// ---------------- Модуль: таймеры дверей ----------------
--- Дверь во время кулдауна остаётся на месте и сама пишет на себе «0:52».
--- Модуль читает этот таймер и показывает его крупно над дверью, чтобы были
--- видны секунды до открытия, а не только метка WAIT.
-local DoorTimers = {
-	enabled = false,
-	active  = false,
-	entries = {},   -- [prompt] = { pos, readyAt, timerMemory, text }
-	conn    = nil,
-}
-
-local function makeDoorTimerText()
-	if not HAS_DRAWING then return nil end
-
-	local text = Drawing.new("Text")
-	text.Visible = false
-	text.Size = 16
-	text.Center = true
-	text.Outline = true
-	text.Color = CFG.TimerColor
-
-	return text
-end
-
-local function destroyDoorTimerText(entry)
-	if entry.text then
-		if entry.text.Remove then
-			entry.text:Remove()
-		end
-		entry.text = nil
-	end
-end
-
--- Раз в 0.5 с читаем таймер у каждой двери: игра сама пишет на ней «0:52»,
--- берём именно это значение, а не статичный Cooldown из атрибутов
-local function scanDoorTimers()
-	local now = Workspace:GetServerTimeNow()
-	local seen = {}
-
-	for _, object in ipairs(Workspace:GetDescendants()) do
-		if object:IsA("ProximityPrompt") and object.Parent then
-			local okTarget, target = pcall(resolveDoorTarget, object)
-
-			if okTarget and target and target.Parent then
-				local entry = DoorTimers.entries[object]
-				if not entry then
-					entry = { timerMemory = {} }
-					DoorTimers.entries[object] = entry
-				end
-
-				local okStatus, _, _, seconds = pcall(doorStatus, entry, object, target)
-
-				entry.pos = target:GetPivot().Position
-				entry.readyAt = (okStatus and seconds and seconds > 0) and (now + seconds) or nil
-				seen[object] = true
-			end
-		end
-	end
-
-	for prompt, entry in pairs(DoorTimers.entries) do
-		if not seen[prompt] then
-			destroyDoorTimerText(entry)
-			DoorTimers.entries[prompt] = nil
-		end
-	end
-end
-
-local function updateDoorTimers()
-	local camera = GetCamera()
-	local now = Workspace:GetServerTimeNow()
-
-	for _, entry in pairs(DoorTimers.entries) do
-		if not entry.text then
-			entry.text = makeDoorTimerText()
-		end
-
-		local text = entry.text
-		if text then
-			local remaining = (entry.readyAt or 0) - now
-			local screen, onScreen = nil, false
-
-			if camera and remaining > 0 then
-				screen, onScreen = camera:WorldToViewportPoint(entry.pos + Vector3.new(0, 4, 0))
-			end
-
-			if onScreen then
-				local seconds = math.max(0, math.ceil(remaining))
-				text.Text = ("%d:%02d"):format(math.floor(seconds / 60), seconds % 60)
-				text.Position = Vector2.new(screen.X, screen.Y)
-				text.Visible = true
-			else
-				text.Visible = false
-			end
-		end
-	end
-end
-
-function DoorTimers:SetEnabled(state)
-	self.enabled = state
-
-	if not state then
-		self.active = false
-		for _, entry in pairs(self.entries) do
-			destroyDoorTimerText(entry)
-		end
-		table.clear(self.entries)
-
-		if self.conn then
-			self.conn:Disconnect()
-			self.conn = nil
-		end
-		return
-	end
-
-	if self.conn then return end
-
-	self.conn = RunService.RenderStepped:Connect(function()
-		if DoorTimers.enabled then
-			updateDoorTimers()
-		end
-	end)
-
-	self.active = true
-	task.spawn(function()
-		while DoorTimers.active do
-			pcall(scanDoorTimers)
-			task.wait(0.5)
-		end
-	end)
-end
-
-function DoorTimers:Stop()
-	self:SetEnabled(false)
-end
-
 --// ---------------- Модуль: флай ----------------
 local Fly = {
 	enabled  = false,
@@ -1619,14 +1483,6 @@ DoorsBox:AddToggle("DoorESP", {
 	end,
 })
 
-DoorsBox:AddToggle("DoorTimerESP", {
-	Text = "Door respawn timer",
-	Default = true,
-	Tooltip = "Секунды до открытия двери, крупно над дверью",
-	Callback = function(state)
-		DoorTimers:SetEnabled(state)
-	end,
-})
 end)
 
 --// ================= COMBAT / Aim =================
@@ -1907,13 +1763,11 @@ Esp:SetChams(true)
 Esp:SetNames(true)
 Prompts:SetEsp(true)
 Prompts:SetInstant(true)
-DoorTimers:SetEnabled(true)
 
 Library:OnUnload(function()
 	Esp:Stop()
 	Aimbot:Stop()
 	Prompts:Stop()
-	DoorTimers:Stop()
 	Farm:Stop()
 	Fly:Stop()
 	print("Unloaded")
