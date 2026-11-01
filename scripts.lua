@@ -44,7 +44,6 @@ local CFG = {
 	LockedColor      = Color3.fromRGB(255, 50, 50),
 	PromptDistance   = 50,                           -- MaxActivationDistance в режиме instant
 	DoorEspDistance  = 500,
-	DoorRespawn      = 90,    -- через сколько секунд открытая дверь возвращается
 	TimerColor       = Color3.fromRGB(255, 200, 60),  -- цвет отсчёта таймера дверей
 	FlySpeedMax      = 100,   -- максимальная скорость флая, одна для всех
 	TeleportBehind   = 3.5,   -- сколько студов за спиной цели
@@ -641,29 +640,30 @@ local function doorStatus(entry, prompt, target)
 		end
 	end
 
-	local seconds = chooseSeconds(entry, candidates) or 0
+	-- Текст самой игры ("0:52") точнее любезно лежащих в атрибутах статичных 90
+	local seconds = candidates.gui or chooseSeconds(entry, candidates) or 0
 
 	if seconds > 0 then
-		return formatTime(seconds), CFG.LockedColor
+		return formatTime(seconds), CFG.LockedColor, seconds
 	end
 
 	if boolValue ~= nil then
 		if boolReady then
-			return boolValue and "READY" or "LOCKED", boolValue and CFG.ReadyColor or CFG.LockedColor
+			return boolValue and "READY" or "LOCKED", boolValue and CFG.ReadyColor or CFG.LockedColor, 0
 		end
-		return boolValue and "LOCKED" or "READY", boolValue and CFG.LockedColor or CFG.ReadyColor
+		return boolValue and "LOCKED" or "READY", boolValue and CFG.LockedColor or CFG.ReadyColor, 0
 	end
 
 	local hint = string.lower(tostring(prompt.ActionText or "") .. " " .. tostring(prompt.ObjectText or ""))
 	if matchAny(hint, TEXT_LOCK_WORDS) then
-		return "LOCKED", CFG.LockedColor
+		return "LOCKED", CFG.LockedColor, 0
 	end
 
 	if prompt.Enabled then
-		return "READY", CFG.ReadyColor
+		return "READY", CFG.ReadyColor, 0
 	end
 
-	return "LOCKED", CFG.LockedColor
+	return "LOCKED", CFG.LockedColor, 0
 end
 
 local function refreshDoorLabels()
@@ -793,15 +793,14 @@ function Prompts:Stop()
 end
 
 --// ---------------- Модуль: таймеры дверей ----------------
--- Открытая дверь исчезает для всех на сервере и возвращается примерно через
--- CFG.DoorRespawn секунд. Модуль запоминает место исчезновения и рисует
--- обратный отсчёт в мире, чтобы было видно, когда туда снова лететь.
+-- Дверь во время кулдауна остаётся на месте и сама пишет на себе «0:52».
+-- Модуль читает этот таймер и показывает его крупно над дверью, чтобы были
+-- видны секунды до открытия, а не только метка WAIT.
 local DoorTimers = {
-	enabled  = false,
-	active   = false,
-	previous = {},   -- [target] = позиция на прошлом скане
-	entries  = {},   -- [target] = { pos, readyAt, startedAt, text }
-	conn     = nil,
+	enabled = false,
+	active  = false,
+	entries = {},   -- [prompt] = { pos, readyAt, timerMemory, text }
+	conn    = nil,
 }
 
 local function makeDoorTimerText()
@@ -826,49 +825,38 @@ local function destroyDoorTimerText(entry)
 	end
 end
 
--- Сканируем двери раз в секунду: пропала из мира — значит её открыли
+-- Раз в 0.5 с читаем таймер у каждой двери: игра сама пишет на ней «0:52»,
+-- берём именно это значение, а не статичный Cooldown из атрибутов
 local function scanDoorTimers()
-	local alive = {}
+	local now = Workspace:GetServerTimeNow()
+	local seen = {}
 
 	for _, object in ipairs(Workspace:GetDescendants()) do
 		if object:IsA("ProximityPrompt") and object.Parent then
-			local target = resolveDoorTarget(object)
-			if target and target.Parent then
-				alive[target] = target:GetPivot().Position
-			end
-		end
-	end
+			local okTarget, target = pcall(resolveDoorTarget, object)
 
-	local now = Workspace:GetServerTimeNow()
-
-	for target, position in pairs(DoorTimers.previous) do
-		if not alive[target] and not DoorTimers.entries[target] then
-			DoorTimers.entries[target] = {
-				pos = position,
-				readyAt = now + CFG.DoorRespawn,
-				startedAt = now,
-			}
-		end
-	end
-
-	for target, entry in pairs(DoorTimers.entries) do
-		if entry.readyAt <= now then
-			-- отсчёт вышел: дверь уже должна быть на месте
-			destroyDoorTimerText(entry)
-			DoorTimers.entries[target] = nil
-		elseif not entry.manual and now - entry.startedAt > 3 then
-			-- дверь вернулась на карту раньше времени — снимаем отсчёт
-			for _, position in pairs(alive) do
-				if (position - entry.pos).Magnitude < 12 then
-					destroyDoorTimerText(entry)
-					DoorTimers.entries[target] = nil
-					break
+			if okTarget and target and target.Parent then
+				local entry = DoorTimers.entries[object]
+				if not entry then
+					entry = { timerMemory = {} }
+					DoorTimers.entries[object] = entry
 				end
+
+				local okStatus, _, _, seconds = pcall(doorStatus, entry, object, target)
+
+				entry.pos = target:GetPivot().Position
+				entry.readyAt = (okStatus and seconds and seconds > 0) and (now + seconds) or nil
+				seen[object] = true
 			end
 		end
 	end
 
-	DoorTimers.previous = alive
+	for prompt, entry in pairs(DoorTimers.entries) do
+		if not seen[prompt] then
+			destroyDoorTimerText(entry)
+			DoorTimers.entries[prompt] = nil
+		end
+	end
 end
 
 local function updateDoorTimers()
@@ -882,7 +870,7 @@ local function updateDoorTimers()
 
 		local text = entry.text
 		if text then
-			local remaining = entry.readyAt - now
+			local remaining = (entry.readyAt or 0) - now
 			local screen, onScreen = nil, false
 
 			if camera and remaining > 0 then
@@ -910,7 +898,6 @@ function DoorTimers:SetEnabled(state)
 			destroyDoorTimerText(entry)
 		end
 		table.clear(self.entries)
-		self.previous = {}
 
 		if self.conn then
 			self.conn:Disconnect()
@@ -931,24 +918,9 @@ function DoorTimers:SetEnabled(state)
 	task.spawn(function()
 		while DoorTimers.active do
 			pcall(scanDoorTimers)
-			task.wait(1)
+			task.wait(0.5)
 		end
 	end)
-end
-
--- Старт отсчёта сразу после открытия двери фармом, не дожидаясь следующего скана
-function DoorTimers:Mark(target, position)
-	if not target then return end
-
-	local pos = position
-	if not pos and target.Parent then
-		pos = target:GetPivot().Position
-	end
-	if not pos then return end
-
-	local now = Workspace:GetServerTimeNow()
-	-- manual: отсчёт от самого фарма, его не снимаем проверкой «дверь рядом»
-	self.entries[target] = { pos = pos, readyAt = now + CFG.DoorRespawn, startedAt = now, manual = true }
 end
 
 function DoorTimers:Stop()
@@ -1570,7 +1542,6 @@ function Farm:Init()
 			if Farm.openTimer <= 0 then
 				if Farm.target then
 					openFarmDoor(Farm.target)
-					DoorTimers:Mark(Farm.target)
 					Farm.visited[Farm.target] = true
 				end
 
@@ -1651,7 +1622,7 @@ DoorsBox:AddToggle("DoorESP", {
 DoorsBox:AddToggle("DoorTimerESP", {
 	Text = "Door respawn timer",
 	Default = true,
-	Tooltip = "Отсчёт до возврата открытой двери (90 с)",
+	Tooltip = "Секунды до открытия двери, крупно над дверью",
 	Callback = function(state)
 		DoorTimers:SetEnabled(state)
 	end,
