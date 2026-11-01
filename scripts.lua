@@ -1229,8 +1229,8 @@ Toggles = Library.Toggles
 
 --// ---------------- Window ----------------
 local Window = Library:CreateWindow({
-	Title = "Buffy Hub",
-	Footer = "v1.2.0 · no-main build",
+	Title = "СПЕРМА",
+	Footer = "WWW.PORNOHUB.COM",
 	Icon = 6031075931,          -- иконка окна (глаз), можно вписать другой rbxassetid
 	NotifySide = "Right",
 	ShowCustomCursor = false,   -- обычный курсор Roblox
