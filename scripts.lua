@@ -44,6 +44,8 @@ local CFG = {
 	LockedColor      = Color3.fromRGB(255, 50, 50),
 	PromptDistance   = 50,                           -- MaxActivationDistance в режиме instant
 	DoorEspDistance  = 500,
+	DoorRespawn      = 90,    -- через сколько секунд открытая дверь возвращается
+	TimerColor       = Color3.fromRGB(255, 200, 60),  -- цвет отсчёта таймера дверей
 	FlySpeedMax      = 100,   -- максимальная скорость флая, одна для всех
 	TeleportBehind   = 3.5,   -- сколько студов за спиной цели
 	TeleportSpeed    = 55,    -- студов в секунду при плавном перемещении
@@ -790,6 +792,169 @@ function Prompts:Stop()
 	table.clear(self.cache)
 end
 
+--// ---------------- Модуль: таймеры дверей ----------------
+-- Открытая дверь исчезает для всех на сервере и возвращается примерно через
+-- CFG.DoorRespawn секунд. Модуль запоминает место исчезновения и рисует
+-- обратный отсчёт в мире, чтобы было видно, когда туда снова лететь.
+local DoorTimers = {
+	enabled  = false,
+	active   = false,
+	previous = {},   -- [target] = позиция на прошлом скане
+	entries  = {},   -- [target] = { pos, readyAt, startedAt, text }
+	conn     = nil,
+}
+
+local function makeDoorTimerText()
+	if not HAS_DRAWING then return nil end
+
+	local text = Drawing.new("Text")
+	text.Visible = false
+	text.Size = 16
+	text.Center = true
+	text.Outline = true
+	text.Color = CFG.TimerColor
+
+	return text
+end
+
+local function destroyDoorTimerText(entry)
+	if entry.text then
+		if entry.text.Remove then
+			entry.text:Remove()
+		end
+		entry.text = nil
+	end
+end
+
+-- Сканируем двери раз в секунду: пропала из мира — значит её открыли
+local function scanDoorTimers()
+	local alive = {}
+
+	for _, object in ipairs(Workspace:GetDescendants()) do
+		if object:IsA("ProximityPrompt") and object.Parent then
+			local target = resolveDoorTarget(object)
+			if target and target.Parent then
+				alive[target] = target:GetPivot().Position
+			end
+		end
+	end
+
+	local now = Workspace:GetServerTimeNow()
+
+	for target, position in pairs(DoorTimers.previous) do
+		if not alive[target] and not DoorTimers.entries[target] then
+			DoorTimers.entries[target] = {
+				pos = position,
+				readyAt = now + CFG.DoorRespawn,
+				startedAt = now,
+			}
+		end
+	end
+
+	for target, entry in pairs(DoorTimers.entries) do
+		if entry.readyAt <= now then
+			-- отсчёт вышел: дверь уже должна быть на месте
+			destroyDoorTimerText(entry)
+			DoorTimers.entries[target] = nil
+		elseif not entry.manual and now - entry.startedAt > 3 then
+			-- дверь вернулась на карту раньше времени — снимаем отсчёт
+			for _, position in pairs(alive) do
+				if (position - entry.pos).Magnitude < 12 then
+					destroyDoorTimerText(entry)
+					DoorTimers.entries[target] = nil
+					break
+				end
+			end
+		end
+	end
+
+	DoorTimers.previous = alive
+end
+
+local function updateDoorTimers()
+	local camera = GetCamera()
+	local now = Workspace:GetServerTimeNow()
+
+	for _, entry in pairs(DoorTimers.entries) do
+		if not entry.text then
+			entry.text = makeDoorTimerText()
+		end
+
+		local text = entry.text
+		if text then
+			local remaining = entry.readyAt - now
+			local screen, onScreen = nil, false
+
+			if camera and remaining > 0 then
+				screen, onScreen = camera:WorldToViewportPoint(entry.pos + Vector3.new(0, 4, 0))
+			end
+
+			if onScreen then
+				local seconds = math.max(0, math.ceil(remaining))
+				text.Text = ("%d:%02d"):format(math.floor(seconds / 60), seconds % 60)
+				text.Position = Vector2.new(screen.X, screen.Y)
+				text.Visible = true
+			else
+				text.Visible = false
+			end
+		end
+	end
+end
+
+function DoorTimers:SetEnabled(state)
+	self.enabled = state
+
+	if not state then
+		self.active = false
+		for _, entry in pairs(self.entries) do
+			destroyDoorTimerText(entry)
+		end
+		table.clear(self.entries)
+		self.previous = {}
+
+		if self.conn then
+			self.conn:Disconnect()
+			self.conn = nil
+		end
+		return
+	end
+
+	if self.conn then return end
+
+	self.conn = RunService.RenderStepped:Connect(function()
+		if DoorTimers.enabled then
+			updateDoorTimers()
+		end
+	end)
+
+	self.active = true
+	task.spawn(function()
+		while DoorTimers.active do
+			pcall(scanDoorTimers)
+			task.wait(1)
+		end
+	end)
+end
+
+-- Старт отсчёта сразу после открытия двери фармом, не дожидаясь следующего скана
+function DoorTimers:Mark(target, position)
+	if not target then return end
+
+	local pos = position
+	if not pos and target.Parent then
+		pos = target:GetPivot().Position
+	end
+	if not pos then return end
+
+	local now = Workspace:GetServerTimeNow()
+	-- manual: отсчёт от самого фарма, его не снимаем проверкой «дверь рядом»
+	self.entries[target] = { pos = pos, readyAt = now + CFG.DoorRespawn, startedAt = now, manual = true }
+end
+
+function DoorTimers:Stop()
+	self:SetEnabled(false)
+end
+
 --// ---------------- Модуль: флай ----------------
 local Fly = {
 	enabled  = false,
@@ -1225,19 +1390,23 @@ local function openFarmDoor(model)
 	end
 end
 
-local function farmStep(root, point, dt)
+-- Шаг к точке: не больше бюджета за кадр и без перелёта. Возвращает остаток
+-- бюджета и оставшуюся дистанцию: на высокой скорости точки не проскакивают.
+local function stepTo(root, point, budget)
 	local delta = point - root.Position
 	local distance = delta.Magnitude
-	if distance < 0.1 then return distance end
+	if distance < 0.001 or budget <= 0 then
+		return budget, distance
+	end
 
-	local step = math.min(math.clamp(Farm.speed, 10, 400) * dt, distance)
+	local step = math.min(budget, distance)
 	local nextPos = root.Position + delta.Unit * step
 
 	root.CFrame = CFrame.lookAt(nextPos, nextPos + delta.Unit)
 	root.AssemblyLinearVelocity = Vector3.zero
 	root.AssemblyAngularVelocity = Vector3.zero
 
-	return distance
+	return budget - step, distance - step
 end
 
 function Farm:SetRunning(state)
@@ -1275,14 +1444,6 @@ function Farm:Init()
 			refreshFarmCache()
 		end
 
-		-- анти-застревание: позиция почти не меняется — значит куда-то упёрлись
-		if (root.Position - Farm.lastPos).Magnitude < 0.6 then
-			Farm.stuck = Farm.stuck + dt
-		else
-			Farm.stuck = 0
-		end
-		Farm.lastPos = root.Position
-
 		Farm.sightTimer = Farm.sightTimer - dt
 		Farm.repathTimer = Farm.repathTimer - dt
 		Farm.retargetTimer = Farm.retargetTimer - dt
@@ -1291,7 +1452,8 @@ function Farm:Init()
 			local model, part = nearestFarmDoor(root)
 			if model then
 				Farm.target = model
-				Farm.timer, Farm.stuck = 0, 0
+				Farm.timer = 0
+				Farm.bestDist, Farm.progressTimer = math.huge, 0
 				Farm.waypoints, Farm.wpIndex = {}, 1
 				Farm.phase = buildFarmPath(root, part) and "PATH" or "DIRECT"
 			end
@@ -1306,11 +1468,30 @@ function Farm:Init()
 				Farm.phase = "IDLE"
 			else
 				local distance = (part.Position - root.Position).Magnitude
+				-- бюджет скорости за кадр: скачок dt (лаг) не должен телепортировать
+				-- персонажа через полкарты и сбивать путь
+				local budget = math.clamp(Farm.speed, 10, 400) * math.min(dt, 1 / 30)
+				local arrive = math.max(5, budget + 2)
 
-				if distance < 6 then
+				if distance < arrive then
 					Farm.phase = "OPEN"
 					Farm.openTimer = 0.4
 				else
+					-- прогресс к цели вместо счётчика кадров: если дистанция не
+					-- уменьшается — упёрлись, и неважно, какая скорость
+					if distance < Farm.bestDist - 0.5 then
+						Farm.bestDist = distance
+						Farm.progressTimer = 0
+					else
+						Farm.progressTimer = Farm.progressTimer + dt
+					end
+
+					if Farm.progressTimer > 1.5 then
+						Farm.progressTimer = 0
+						Farm.bestDist = distance
+						Farm.phase = buildFarmPath(root, part) and "PATH" or "DIRECT"
+					end
+
 					-- раз в 0.25 с смотрим, видно ли дверь напрямую
 					if Farm.sightTimer <= 0 then
 						Farm.sightTimer = 0.25
@@ -1335,27 +1516,31 @@ function Farm:Init()
 					end
 
 					if Farm.phase == "PATH" then
-						local waypoint = Farm.waypoints[Farm.wpIndex]
-						if waypoint then
-							if farmStep(root, waypoint.Position, dt) < 4 then
-								if waypoint.Action == Enum.PathWaypointAction.Jump then
-									humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+						-- за кадр проходим столько путевых точек, сколько влезает в
+						-- бюджет: иначе на 150+ перелетаем точку и летим назад
+						while budget > 0 do
+							local waypoint = Farm.waypoints[Farm.wpIndex]
+							if not waypoint then
+								if not buildFarmPath(root, part) then
+									Farm.phase = "DIRECT"
 								end
-								Farm.wpIndex = Farm.wpIndex + 1
+								break
 							end
-						elseif not buildFarmPath(root, part) then
-							Farm.phase = "DIRECT"
-						end
 
-						-- упёрлись в угол: сразу новый путь, а не ждём таймаут
-						if Farm.stuck > 1.2 then
-							Farm.stuck = 0
-							if not buildFarmPath(root, part) then
-								Farm.phase = "DIRECT"
+							local left
+							budget, left = stepTo(root, waypoint.Position, budget)
+
+							if left > 0.5 then
+								break
 							end
+
+							if waypoint.Action == Enum.PathWaypointAction.Jump then
+								humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+							end
+							Farm.wpIndex = Farm.wpIndex + 1
 						end
 					else
-						farmStep(root, part.Position, dt)
+						stepTo(root, part.Position, budget)
 					end
 
 					-- рядом появилась другая дверь — переключаемся, чтобы не лететь назад
@@ -1365,7 +1550,8 @@ function Farm:Init()
 						if nearModel and nearModel ~= model then
 							if (nearPart.Position - root.Position).Magnitude < distance * 0.5 then
 								Farm.target = nearModel
-								Farm.timer, Farm.stuck = 0, 0
+								Farm.timer = 0
+								Farm.bestDist, Farm.progressTimer = math.huge, 0
 								Farm.phase = buildFarmPath(root, nearPart) and "PATH" or "DIRECT"
 							end
 						end
@@ -1384,6 +1570,7 @@ function Farm:Init()
 			if Farm.openTimer <= 0 then
 				if Farm.target then
 					openFarmDoor(Farm.target)
+					DoorTimers:Mark(Farm.target)
 					Farm.visited[Farm.target] = true
 				end
 
@@ -1458,6 +1645,15 @@ DoorsBox:AddToggle("DoorESP", {
 	Tooltip = "Подсветка дверей и метка READY",
 	Callback = function(state)
 		Prompts:SetEsp(state)
+	end,
+})
+
+DoorsBox:AddToggle("DoorTimerESP", {
+	Text = "Door respawn timer",
+	Default = true,
+	Tooltip = "Отсчёт до возврата открытой двери (90 с)",
+	Callback = function(state)
+		DoorTimers:SetEnabled(state)
 	end,
 })
 end)
@@ -1740,11 +1936,13 @@ Esp:SetChams(true)
 Esp:SetNames(true)
 Prompts:SetEsp(true)
 Prompts:SetInstant(true)
+DoorTimers:SetEnabled(true)
 
 Library:OnUnload(function()
 	Esp:Stop()
 	Aimbot:Stop()
 	Prompts:Stop()
+	DoorTimers:Stop()
 	Farm:Stop()
 	Fly:Stop()
 	print("Unloaded")
