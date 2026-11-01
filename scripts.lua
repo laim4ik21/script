@@ -48,6 +48,8 @@ local CFG = {
 	TeleportBehind   = 3.5,   -- сколько студов за спиной цели
 	TeleportSpeed    = 55,    -- студов в секунду при плавном перемещении
 	TeleportRange    = 250,   -- макс. дистанция до цели
+	BaseWalkSpeed    = 16,    -- к какой скорости возвращает No slow
+	BaseJumpPower    = 50,    -- к какой высоте прыжка возвращает No slow
 	-- Подмена ника в ESP: видят все юзеры скрипта. Настоящий ник/DisplayName в Roblox не меняются.
 	-- Пример: DisplayNames = { ["x1x1x1x281"] = "новый ник" }
 	DisplayNames     = {},
@@ -898,6 +900,125 @@ function Fly:Stop()
 	end
 end
 
+--// ---------------- Модуль: анти-дебаффы ----------------
+-- No slow: если игра срезала скорость или прыжок, возвращаем базовые значения.
+-- No stun: выбивает из FallingDown/Ragdoll/PlatformStanding, чтобы не лежать
+-- после удара. Всё это клиентские правки — сервер может вернуть стан обратно.
+local Clean = {
+	slow      = false,
+	stun      = false,
+	stunTimer = 0,
+	conn      = nil,
+}
+
+local STUN_STATES = {
+	Enum.HumanoidStateType.FallingDown,
+	Enum.HumanoidStateType.Ragdoll,
+	Enum.HumanoidStateType.PlatformStanding,
+}
+
+local function cleanHumanoid()
+	local character = LocalPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid or humanoid.Health <= 0 then
+		return nil
+	end
+
+	return humanoid
+end
+
+local function keepBaseSpeed(humanoid)
+	if humanoid.WalkSpeed < CFG.BaseWalkSpeed then
+		humanoid.WalkSpeed = CFG.BaseWalkSpeed
+	end
+
+	if humanoid.UseJumpPower and humanoid.JumpPower < CFG.BaseJumpPower then
+		humanoid.JumpPower = CFG.BaseJumpPower
+	end
+end
+
+local function clearStun(humanoid)
+	-- флай сам держит PlatformStand = true, не мешаем ему
+	if Fly.enabled then return end
+
+	if humanoid.PlatformStand then
+		humanoid.PlatformStand = false
+	end
+
+	for _, state in ipairs(STUN_STATES) do
+		pcall(function()
+			humanoid:SetStateEnabled(state, false)
+		end)
+	end
+
+	local current = humanoid:GetState()
+	if current == Enum.HumanoidStateType.FallingDown
+		or current == Enum.HumanoidStateType.Ragdoll
+		or current == Enum.HumanoidStateType.PlatformStanding then
+		pcall(function()
+			humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end)
+	end
+end
+
+local function cleanStep(dt)
+	local humanoid = cleanHumanoid()
+	if not humanoid then return end
+
+	if Clean.slow then
+		keepBaseSpeed(humanoid)
+	end
+
+	if Clean.stun then
+		Clean.stunTimer -= dt
+		if Clean.stunTimer <= 0 then
+			Clean.stunTimer = 0.1
+			pcall(clearStun, humanoid)
+		end
+	end
+end
+
+function Clean:SetSlow(state)
+	self.slow = state
+end
+
+function Clean:SetStun(state)
+	self.stun = state
+
+	if state then return end
+
+	-- возвращаем игре обычное поведение состояний
+	local humanoid = cleanHumanoid()
+	if not humanoid then return end
+
+	for _, stateType in ipairs(STUN_STATES) do
+		pcall(function()
+			humanoid:SetStateEnabled(stateType, true)
+		end)
+	end
+end
+
+function Clean:Init()
+	if self.conn then return end
+
+	self.conn = RunService.Heartbeat:Connect(function(dt)
+		if Clean.slow or Clean.stun then
+			pcall(cleanStep, dt)
+		end
+	end)
+end
+
+function Clean:Stop()
+	self.slow = false
+	self:SetStun(false)
+
+	if self.conn then
+		self.conn:Disconnect()
+		self.conn = nil
+	end
+end
+
 --// ---------------- Библиотека ----------------
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
@@ -1587,6 +1708,35 @@ TpBox:AddSlider("TpSpeed", {
 TpBox:AddLabel("Идёт мелкими шагами по кадру (примерно 1 студ за кадр). Если игра всё равно дёргает назад — снизь скорость.", true)
 end)
 
+--// ================= COMBAT / Debuffs =================
+Build("Combat / Debuffs", function()
+local DebuffBox = Tabs.Combat:AddGroupbox({
+	Side = "Right",
+	Name = "Debuffs",
+	IconName = "shield",
+})
+
+DebuffBox:AddToggle("NoSlow", {
+	Text = "No slow",
+	Default = false,
+	Tooltip = "Возвращает базовую скорость, если игра её срезала",
+	Callback = function(state)
+		Clean:SetSlow(state)
+	end,
+})
+
+DebuffBox:AddToggle("NoStun", {
+	Text = "No stun",
+	Default = false,
+	Tooltip = "Выбивает из стана и рэгдолла (FallingDown/Ragdoll)",
+	Callback = function(state)
+		Clean:SetStun(state)
+	end,
+})
+
+DebuffBox:AddLabel("Если сервер удерживает стан, персонажа может дёрнуть назад — это отклик сервера, а не баг скрипта.", true)
+end)
+
 --// ================= MISC / Interaction =================
 Build("Misc", function()
 local InteractBox = Tabs.Misc:AddGroupbox({
@@ -1757,6 +1907,7 @@ Esp:Start()
 Prompts:Start()
 Aimbot:Init()
 Fly:Init()
+Clean:Init()
 Farm:Init()
 
 Esp:SetChams(true)
@@ -1770,5 +1921,6 @@ Library:OnUnload(function()
 	Prompts:Stop()
 	Farm:Stop()
 	Fly:Stop()
+	Clean:Stop()
 	print("Unloaded")
 end)
