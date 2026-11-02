@@ -294,6 +294,7 @@ function Esp:Stop()
 end
 
 local Teleport   -- модуль телепорта объявлен ниже: аимботу нужен его флаг busy
+local Rage       -- модуль rage aim объявлен ниже: аимбот уступает ему управление
 
 --// ---------------- Модуль: аимбот ----------------
 local Aimbot = {
@@ -302,10 +303,6 @@ local Aimbot = {
 	yOffset    = 10,    -- фиксированное смещение под верхнюю панель, в меню не выводится
 	smoothness = 45,    -- 0 = мгновенное прилипание, 95 = очень плавно
 	strength   = 100,   -- сколько процентов пути к цели доводит аим
-	rage       = false, -- rage aim: наведение бегает треугольником вокруг цели
-	rageRadius = 4,     -- радиус треугольника в студах
-	rageSpeed  = 2.5,   -- оборотов по треугольнику в секунду
-	rageT      = 0,     -- фаза 0..1 по периметру
 	target     = nil,
 	lastTarget = nil,   -- последняя цель: её держит телепорт-следование
 	circle     = nil,
@@ -368,6 +365,8 @@ end
 local function aimStep(dt)
 	-- во время телепорта не трогаем CFrame: две записи в один кадр дерутся между собой
 	if Teleport and Teleport.busy then return end
+	-- rage aim сильнее обычного аима: когда он включён, аимбот не мешает ему вести тело
+	if Rage and Rage.enabled then return end
 
 	local centre = getAimPoint()
 
@@ -413,14 +412,6 @@ local function aimStep(dt)
 	local basePoint = camera and (camera.CFrame.Position + camera.CFrame.LookVector * 50) or lookPos
 	local aimPoint = basePoint:Lerp(lookPos, Aimbot.strength / 100)
 
-	if Aimbot.rage then
-		-- rage: точка наведения гонится по сторонам треугольника вокруг цели,
-		-- поэтому персонаж крутится вокруг неё, не отрывая взгляд от неё
-		Aimbot.rageT = (Aimbot.rageT + (dt or 0) * Aimbot.rageSpeed) % 1
-		aimPoint = trianglePoint(lookPos, Aimbot.rageRadius, Aimbot.rageT)
-		alpha = 1 -- без сглаживания, иначе треугольник размазывается в круг
-	end
-
 	root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, aimPoint), alpha)
 end
 
@@ -446,11 +437,6 @@ function Aimbot:SetEnabled(state)
 	end
 end
 
-function Aimbot:SetRage(state)
-	self.rage = state
-	self.rageT = 0
-end
-
 function Aimbot:Stop()
 	self.enabled = false
 	self.target = nil
@@ -463,6 +449,81 @@ function Aimbot:Stop()
 	if self.circle then
 		self.circle:Remove()
 		self.circle = nil
+	end
+end
+
+--// ---------------- Модуль: rage aim ----------------
+-- Отдельный модуль: свой тоггл и свой коннект, Aim assist и его бинд ему не нужны.
+Rage = {
+	enabled = false,
+	radius  = 4,     -- радиус треугольника в студах
+	speed   = 2.5,   -- оборотов по периметру в секунду
+	range   = 100,   -- на кого вообще реагируем, студы
+	t       = 0,     -- фаза 0..1 по периметру
+	target  = nil,
+	conn    = nil,
+}
+
+-- Ближайший живой игрок в радиусе range: rage не зависит от курсора и FOV-круга
+local function findRageTarget(root)
+	local best, bestDistance = nil, Rage.range
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if isValidTarget(player) then
+			local distance = (player.Character.HumanoidRootPart.Position - root.Position).Magnitude
+			if distance <= bestDistance then
+				best, bestDistance = player, distance
+			end
+		end
+	end
+
+	return best
+end
+
+local function rageStep(dt)
+	if not Rage.enabled then return end
+	-- во время телепорта не трогаем CFrame: две записи в один кадр дерутся между собой
+	if Teleport and Teleport.busy then return end
+
+	local character = LocalPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	if not isValidTarget(Rage.target) then
+		Rage.target = findRageTarget(root)
+	end
+
+	local target = Rage.target
+	if not target then return end
+
+	Rage.t = (Rage.t + (dt or 0) * Rage.speed) % 1
+
+	local targetPos = target.Character.HumanoidRootPart.Position
+	local lookPos = Vector3.new(targetPos.X, root.Position.Y, targetPos.Z)
+
+	-- без сглаживания: иначе треугольник размазывается в круг
+	root.CFrame = CFrame.lookAt(root.Position, trianglePoint(lookPos, Rage.radius, Rage.t))
+end
+
+function Rage:Init()
+	self.conn = RunService.RenderStepped:Connect(rageStep)
+end
+
+function Rage:SetEnabled(state)
+	self.enabled = state
+	self.t = 0
+	if not state then
+		self.target = nil
+	end
+end
+
+function Rage:Stop()
+	self.enabled = false
+	self.target = nil
+
+	if self.conn then
+		self.conn:Disconnect()
+		self.conn = nil
 	end
 end
 
@@ -1679,33 +1740,6 @@ AimBox:AddSlider("AimSmooth", {
 	end,
 })
 
-AimBox:AddToggle("RageAim", {
-	Text = "Rage aim",
-	Default = false,
-	Tooltip = "Наведение бегает треугольником вокруг цели",
-	Callback = function(state)
-		Aimbot:SetRage(state)
-	end,
-})
-
-AimBox:AddSlider("RageRadius", {
-	Text = "Rage radius",
-	Default = 4, Min = 2, Max = 12, Rounding = 0,
-	Tooltip = "Радиус треугольника вокруг цели, студы",
-	Callback = function(value)
-		Aimbot.rageRadius = value
-	end,
-})
-
-AimBox:AddSlider("RageSpeed", {
-	Text = "Rage speed",
-	Default = 2.5, Min = 0.5, Max = 6, Rounding = 1,
-	Tooltip = "Скорость по треугольнику, оборотов в секунду",
-	Callback = function(value)
-		Aimbot.rageSpeed = value
-	end,
-})
-
 AimBox:AddSlider("AimStrength", {
 	Text = "Strength",
 	Default = 100, Min = 10, Max = 100, Rounding = 0,
@@ -1714,6 +1748,44 @@ AimBox:AddSlider("AimStrength", {
 		Aimbot.strength = value
 	end,
 })
+end)
+
+--// ================= COMBAT / Rage aim =================
+Build("Combat / Rage", function()
+local RageBox = Tabs.Combat:AddGroupbox({
+	Side = "Right",
+	Name = "Rage aim",
+	IconName = "crosshair",
+})
+
+RageBox:AddToggle("RageEnabled", {
+	Text = "Rage aim",
+	Default = false,
+	Tooltip = "Наведение бегает треугольником вокруг ближайшей цели; Aim assist не нужен",
+	Callback = function(state)
+		Rage:SetEnabled(state)
+	end,
+})
+
+RageBox:AddSlider("RageRadius", {
+	Text = "Rage radius",
+	Default = 4, Min = 2, Max = 12, Rounding = 0,
+	Tooltip = "Радиус треугольника вокруг цели, студы",
+	Callback = function(value)
+		Rage.radius = value
+	end,
+})
+
+RageBox:AddSlider("RageSpeed", {
+	Text = "Rage speed",
+	Default = 2.5, Min = 0.5, Max = 6, Rounding = 1,
+	Tooltip = "Скорость по треугольнику, оборотов в секунду",
+	Callback = function(value)
+		Rage.speed = value
+	end,
+})
+
+RageBox:AddLabel("Держит ближайшего игрока в 100 студах, курсор и FOV не важны. Пока включён — Aim assist уступает ему управление.", true)
 end)
 
 --// ================= COMBAT / Teleport behind =================
@@ -1956,6 +2028,7 @@ end
 Esp:Start()
 Prompts:Start()
 Aimbot:Init()
+Rage:Init()
 Fly:Init()
 Clean:Init()
 Farm:Init()
@@ -1968,6 +2041,7 @@ Prompts:SetInstant(true)
 Library:OnUnload(function()
 	Esp:Stop()
 	Aimbot:Stop()
+	Rage:Stop()
 	Prompts:Stop()
 	Farm:Stop()
 	Fly:Stop()
