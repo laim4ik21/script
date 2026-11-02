@@ -348,19 +348,38 @@ local function findClosestTarget(centre)
 	return best
 end
 
--- Точка на периметре треугольника вокруг цели. t = 0..1 по всем трём сторонам.
-local function trianglePoint(centre, radius, t)
-	local seg = math.floor(t * 3) % 3
-	local u = t * 3 - math.floor(t * 3)
-	local step = math.pi * 2 / 3
+-- Точки фигур вокруг цели: t = 0..1 по всему периметру.
+local function polygonPoint(centre, radius, t, sides, offset)
+	local step = math.pi * 2 / sides
+	local seg = math.floor(t * sides) % sides
+	local u = t * sides - math.floor(t * sides)
 
 	local function vertex(index)
-		local angle = index * step
+		local angle = index * step + offset
 		return Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
 	end
 
-	return centre + vertex(seg):Lerp(vertex((seg + 1) % 3), u)
+	return centre + vertex(seg):Lerp(vertex((seg + 1) % sides), u)
 end
+
+local function trianglePoint(centre, radius, t)
+	return polygonPoint(centre, radius, t, 3, 0)
+end
+
+local function squarePoint(centre, radius, t)
+	return polygonPoint(centre, radius, t, 4, math.pi / 4)
+end
+
+local function circlePoint(centre, radius, t)
+	local angle = t * math.pi * 2
+	return centre + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+end
+
+local RAGE_SHAPES = {
+	Triangle = trianglePoint,
+	Square   = squarePoint,
+	Circle   = circlePoint,
+}
 
 local function aimStep(dt)
 	-- во время телепорта не трогаем CFrame: две записи в один кадр дерутся между собой
@@ -456,7 +475,8 @@ end
 -- Отдельный модуль: свой тоггл и свой коннект, Aim assist и его бинд ему не нужны.
 Rage = {
 	enabled = false,
-	radius  = 4,     -- радиус треугольника в студах
+	mode    = nil,   -- "Triangle" / "Square" / "Circle"; nil — выключен
+	radius  = 4,     -- радиус фигуры в студах
 	speed   = 2.5,   -- оборотов по периметру в секунду
 	range   = 100,   -- на кого вообще реагируем, студы
 	t       = 0,     -- фаза 0..1 по периметру
@@ -501,18 +521,20 @@ local function rageStep(dt)
 	local targetPos = target.Character.HumanoidRootPart.Position
 	local lookPos = Vector3.new(targetPos.X, root.Position.Y, targetPos.Z)
 
-	-- без сглаживания: иначе треугольник размазывается в круг
-	root.CFrame = CFrame.lookAt(root.Position, trianglePoint(lookPos, Rage.radius, Rage.t))
+	-- без сглаживания: иначе фигура размазывается в круг
+	local shape = RAGE_SHAPES[Rage.mode] or trianglePoint
+	root.CFrame = CFrame.lookAt(root.Position, shape(lookPos, Rage.radius, Rage.t))
 end
 
 function Rage:Init()
 	self.conn = RunService.RenderStepped:Connect(rageStep)
 end
 
-function Rage:SetEnabled(state)
-	self.enabled = state
+function Rage:SetMode(mode)
+	self.mode = mode
+	self.enabled = mode ~= nil
 	self.t = 0
-	if not state then
+	if not self.enabled then
 		self.target = nil
 	end
 end
@@ -1758,19 +1780,49 @@ local RageBox = Tabs.Combat:AddGroupbox({
 	IconName = "crosshair",
 })
 
-RageBox:AddToggle("RageEnabled", {
-	Text = "Rage aim",
-	Default = false,
-	Tooltip = "Наведение бегает треугольником вокруг ближайшей цели; Aim assist не нужен",
-	Callback = function(state)
-		Rage:SetEnabled(state)
-	end,
-})
+-- Как у Debuffs: один блок, несколько переключателей. Активной может быть только одна фигура.
+local shapeToggles = {}
+local syncingShapes = false
+
+local function setShape(name, state)
+	if syncingShapes then return end
+
+	if state then
+		syncingShapes = true
+		for other, toggle in pairs(shapeToggles) do
+			if other ~= name then
+				toggle:SetValue(false)
+			end
+		end
+		syncingShapes = false
+		Rage:SetMode(name)
+	elseif Rage.mode == name then
+		Rage:SetMode(nil)
+	end
+end
+
+local function addShapeToggle(key, name, text)
+	local toggle = RageBox:AddToggle(key, {
+		Text = text,
+		Default = false,
+		Tooltip = "Наведение ходит по фигуре вокруг ближайшей цели; Aim assist не нужен",
+		Callback = function(state)
+			setShape(name, state)
+		end,
+	})
+
+	shapeToggles[name] = toggle
+	return toggle
+end
+
+addShapeToggle("RageTriangle", "Triangle", "Triangle")
+addShapeToggle("RageSquare", "Square", "Square")
+addShapeToggle("RageCircle", "Circle", "Circle")
 
 RageBox:AddSlider("RageRadius", {
 	Text = "Rage radius",
 	Default = 4, Min = 2, Max = 12, Rounding = 0,
-	Tooltip = "Радиус треугольника вокруг цели, студы",
+	Tooltip = "Радиус фигуры вокруг цели, студы",
 	Callback = function(value)
 		Rage.radius = value
 	end,
@@ -1785,7 +1837,7 @@ RageBox:AddSlider("RageSpeed", {
 	end,
 })
 
-RageBox:AddLabel("Держит ближайшего игрока в 100 студах, курсор и FOV не важны. Пока включён — Aim assist уступает ему управление.", true)
+RageBox:AddLabel("Держит ближайшего игрока в 100 студах, курсор и FOV не важны. Фигуры взаимоисключающие: включение одной выключает остальные. Пока включён — Aim assist уступает управление.", true)
 end)
 
 --// ================= COMBAT / Teleport behind =================
