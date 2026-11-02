@@ -1134,117 +1134,6 @@ function Clean:Stop()
 	end
 end
 
---// ---------------- Модуль: inf dash ----------------
--- Спамит клавишу даша через VirtualInputManager и обнуляет клиентские
--- кулдауны в персонаже (NumberValue и атрибуты вида dash* / cooldown*).
--- Серверный кулдаун так не обойти: если игра держит его на сервере,
--- даш сработает так часто, как сервер разрешит.
-local Dash = {
-	enabled   = false,
-	delay     = 0.05,   -- пауза между нажатиями, секунды
-	key       = Enum.KeyCode.Q,   -- дефолт JJS, можно сменить пикером
-	timer     = 0,
-	scanTimer = 0,
-	conn      = nil,
-}
-
--- Клавиша берётся из пикера каждый раз, чтобы смена бинда работала на лету
-local function dashKeyCode()
-	local option = Options and Options.DashKeyBind
-	local name = option and option.Value
-	local code = name and Enum.KeyCode[name]
-
-	return code or Dash.key
-end
-
-local function pressDash()
-	if not VirtualInputManager then return end
-
-	local key = dashKeyCode()
-
-	pcall(function()
-		VirtualInputManager:SendKeyEvent(true, key, false, game)
-		task.delay(0.01, function()
-			pcall(function()
-				VirtualInputManager:SendKeyEvent(false, key, false, game)
-			end)
-		end)
-	end)
-end
-
-local function isCooldownName(name)
-	local lower = string.lower(name)
-
-	return string.find(lower, "dash", 1, true) ~= nil
-		or string.find(lower, "cooldown", 1, true) ~= nil
-		or lower == "cd"
-end
-
-local function zeroCooldowns()
-	local character = LocalPlayer.Character
-	if not character then return end
-
-	for _, object in ipairs(character:GetDescendants()) do
-		if object:IsA("NumberValue") and object.Value > 0 and isCooldownName(object.Name) then
-			pcall(function()
-				object.Value = 0
-			end)
-		end
-	end
-
-	for _, owner in ipairs({ character, LocalPlayer }) do
-		pcall(function()
-			for _, attribute in ipairs(owner:GetAttributes()) do
-				if isCooldownName(attribute) then
-					local value = owner:GetAttribute(attribute)
-					if type(value) == "number" and value > 0 then
-						owner:SetAttribute(attribute, 0)
-					end
-				end
-			end
-		end)
-	end
-end
-
-local function dashStep(dt)
-	if not Dash.enabled then return end
-	if not LocalPlayer.Character then return end
-
-	dt = dt or 0   -- Heartbeat отдаёт deltaTime первым аргументом
-
-	Dash.timer -= dt
-	if Dash.timer <= 0 then
-		Dash.timer = Dash.delay
-		pressDash()
-	end
-
-	-- тяжёлый обход дерева не каждый кадр: четыре раза в секунду хватает
-	Dash.scanTimer -= dt
-	if Dash.scanTimer <= 0 then
-		Dash.scanTimer = 0.25
-		zeroCooldowns()
-	end
-end
-
-function Dash:Init()
-	self.conn = RunService.Heartbeat:Connect(dashStep)
-end
-
-function Dash:SetEnabled(state)
-	self.enabled = state
-	self.timer = 0
-	self.scanTimer = 0
-end
-
-function Dash:Stop()
-	self.enabled = false
-
-	if self.conn then
-		self.conn:Disconnect()
-		self.conn = nil
-	end
-end
-
 --// ---------------- Библиотека ----------------
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
@@ -1813,7 +1702,6 @@ PlayersBox:AddToggle("NameESP", {
 	end,
 })
 
-
 --// ================= VISUALS / Doors =================
 local DoorsBox = Tabs.Visuals:AddGroupbox({
 	Side = "Right",
@@ -2078,31 +1966,6 @@ MoveBox:AddSlider("FlySpeed", {
 	end,
 })
 
-local DashToggle = MoveBox:AddToggle("InfDash", {
-	Text = "Inf dash",
-	Default = false,
-	Tooltip = "Спамит клавишу даша и обнуляет клиентские кулдауны",
-	Callback = function(state)
-		Dash:SetEnabled(state)
-	end,
-})
-
-DashToggle:AddKeyPicker("DashKeyBind", {
-	Default = "Q",   -- в JJS даш по Q
-	Mode = "Hold",
-	Text = "Dash key",
-	NoUI = false,
-})
-
-MoveBox:AddSlider("DashDelay", {
-	Text = "Dash delay",
-	Default = 0.05, Min = 0.02, Max = 0.5, Rounding = 2,
-	Tooltip = "Пауза между нажатиями, секунды: меньше — чаще",
-	Callback = function(value)
-		Dash.delay = value
-	end,
-})
-
 --// ================= MISC / Auto farm =================
 local FarmBox = Tabs.Misc:AddGroupbox({
 	Side = "Right",
@@ -2219,7 +2082,6 @@ Aimbot:Init()
 Rage:Init()
 Fly:Init()
 Clean:Init()
-Dash:Init()
 Farm:Init()
 
 Esp:SetChams(true)
@@ -2235,6 +2097,5 @@ Library:OnUnload(function()
 	Farm:Stop()
 	Fly:Stop()
 	Clean:Stop()
-	Dash:Stop()
 	print("Unloaded")
 end)
