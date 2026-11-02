@@ -304,8 +304,6 @@ local Aimbot = {
 	strength   = 100,   -- сколько процентов пути к цели доводит аим
 	target     = nil,
 	lastTarget = nil,   -- последняя цель: её держит телепорт-следование
-	mode         = "Body", -- Body | Camera | Body + camera
-	cameraSmooth = 30,     -- плавность поворота камеры
 	circle     = nil,
 	conn       = nil,
 }
@@ -397,39 +395,7 @@ local function aimStep()
 	local basePoint = camera and (camera.CFrame.Position + camera.CFrame.LookVector * 50) or lookPos
 	local aimPoint = basePoint:Lerp(lookPos, Aimbot.strength / 100)
 
-	-- режим Camera крутит только камеру, тело остаётся как есть
-	if Aimbot.mode ~= "Camera" then
-		root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, aimPoint), alpha)
-	end
-end
-
--- Доводка камеры: срабатывает после обновления камеры Roblox, поэтому её
--- поворот не перебивается на этом же кадре.
-local function cameraAimStep()
-	if Aimbot.mode == "Body" or not Aimbot.enabled then return end
-	-- во время телепорта позицию меняет он, камеру не трогаем
-	if Teleport and Teleport.busy then return end
-
-	local holding = Options.AimKey and Options.AimKey:GetState()
-	if not holding then return end
-
-	local target = Aimbot.target
-	if not isValidTarget(target) then return end
-
-	local camera = GetCamera()
-	if not camera then return end
-
-	local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-	if not root then return end
-
-	local targetRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-	if not targetRoot then return end
-
-	-- ровно на уровне своей головы: камера не задирается вверх и не смотрит в пол
-	local lookPos = Vector3.new(targetRoot.Position.X, root.Position.Y + 1.5, targetRoot.Position.Z)
-	local alpha = math.clamp(1 - Aimbot.cameraSmooth / 100, 0.05, 1)
-
-	camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(camera.CFrame.Position, lookPos), alpha)
+	root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, aimPoint), alpha)
 end
 
 function Aimbot:Init()
@@ -445,7 +411,6 @@ function Aimbot:Init()
 	end
 
 	self.conn = RunService.RenderStepped:Connect(aimStep)
-	RunService:BindToRenderStep("BuffyCameraAim", Enum.RenderPriority.Camera.Value + 1, cameraAimStep)
 end
 
 function Aimbot:SetEnabled(state)
@@ -468,10 +433,6 @@ function Aimbot:Stop()
 		self.circle:Remove()
 		self.circle = nil
 	end
-
-	pcall(function()
-		RunService:UnbindFromRenderStep("BuffyCameraAim")
-	end)
 end
 
 --// ---------------- Модуль: промпты и двери ----------------
@@ -1693,25 +1654,6 @@ AimBox:AddSlider("AimSmooth", {
 	Tooltip = "0 — мгновенное прилипание, больше — плавнее",
 	Callback = function(value)
 		Aimbot.smoothness = value
-	end,
-})
-
-AimBox:AddDropdown("AimMode", {
-	Text = "Aim mode",
-	Values = { "Body", "Camera", "Body + camera" },
-	Default = 1,      -- Body: поворот тела, как было раньше
-	Tooltip = "Body — крутится персонаж, Camera — только камера, Body + camera — и то и другое",
-	Callback = function(value)
-		Aimbot.mode = value
-	end,
-})
-
-AimBox:AddSlider("AimCameraSmooth", {
-	Text = "Camera smooth",
-	Default = 30, Min = 0, Max = 95, Rounding = 0,
-	Tooltip = "Плавность поворота камеры: 0 — резко, больше — мягче",
-	Callback = function(value)
-		Aimbot.cameraSmooth = value
 	end,
 })
 
