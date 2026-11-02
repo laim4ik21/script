@@ -45,7 +45,7 @@ local CFG = {
 	LockedColor      = Color3.fromRGB(255, 50, 50),
 	PromptDistance   = 50,                           -- MaxActivationDistance в режиме instant
 	DoorEspDistance  = 500,
-	FlySpeedMax      = 300,   -- максимальная скорость флая, одна для всех
+	FlySpeedMax      = 100,   -- максимальная скорость флая, одна для всех
 	TeleportBehind   = 3.5,   -- сколько студов за спиной цели
 	TeleportSpeed    = 55,    -- студов в секунду при плавном перемещении
 	TeleportRange    = 250,   -- макс. дистанция до цели
@@ -304,6 +304,8 @@ local Aimbot = {
 	strength   = 100,   -- сколько процентов пути к цели доводит аим
 	target     = nil,
 	lastTarget = nil,   -- последняя цель: её держит телепорт-следование
+	cameraMode   = false,  -- доводка камеры, а не только тела
+	cameraSmooth = 30,     -- плавность поворота камеры
 	circle     = nil,
 	conn       = nil,
 }
@@ -398,6 +400,35 @@ local function aimStep()
 	root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, aimPoint), alpha)
 end
 
+-- Доводка камеры: срабатывает после обновления камеры Roblox, поэтому её
+-- поворот не перебивается на этом же кадре.
+local function cameraAimStep()
+	if not Aimbot.cameraMode or not Aimbot.enabled then return end
+	-- во время телепорта позицию меняет он, камеру не трогаем
+	if Teleport and Teleport.busy then return end
+
+	local holding = Options.AimKey and Options.AimKey:GetState()
+	if not holding then return end
+
+	local target = Aimbot.target
+	if not isValidTarget(target) then return end
+
+	local camera = GetCamera()
+	if not camera then return end
+
+	local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	local targetRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+	if not targetRoot then return end
+
+	-- ровно на уровне своей головы: камера не задирается вверх и не смотрит в пол
+	local lookPos = Vector3.new(targetRoot.Position.X, root.Position.Y + 1.5, targetRoot.Position.Z)
+	local alpha = math.clamp(1 - Aimbot.cameraSmooth / 100, 0.05, 1)
+
+	camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(camera.CFrame.Position, lookPos), alpha)
+end
+
 function Aimbot:Init()
 	if HAS_DRAWING then
 		local circle = Drawing.new("Circle")
@@ -411,6 +442,7 @@ function Aimbot:Init()
 	end
 
 	self.conn = RunService.RenderStepped:Connect(aimStep)
+	RunService:BindToRenderStep("BuffyCameraAim", Enum.RenderPriority.Camera.Value + 1, cameraAimStep)
 end
 
 function Aimbot:SetEnabled(state)
@@ -433,6 +465,10 @@ function Aimbot:Stop()
 		self.circle:Remove()
 		self.circle = nil
 	end
+
+	pcall(function()
+		RunService:UnbindFromRenderStep("BuffyCameraAim")
+	end)
 end
 
 --// ---------------- Модуль: промпты и двери ----------------
@@ -1020,204 +1056,6 @@ function Clean:Stop()
 	end
 end
 
---// ---------------- Модуль: аудит клиента ----------------
--- Только чтение: ничего не вызываем и не меняем. Смотрим, какие фреймворки
--- сидят на клиенте и какие ремоуты торчат наружу.
-local Audit = {
-	-- слова, по которым имя ремоута выглядит опасным
-	riskyWords = {
-		"admin", "grant", "give", "ban", "kick", "cash", "money",
-		"coin", "reward", "buy", "purchase", "damage", "heal",
-		"redeem", "promo", "command", "cmd", "exec", "panel",
-	},
-	-- флаги, которые игра может вешать на игрока
-	flagWords = {
-		"admin", "permission", "rank", "owner", "vip", "role",
-		"donat", "premium", "moderator",
-	},
-	maxScan = 8000,   -- предел объектов за один проход
-}
-
-local FRAMEWORKS = {
-	{ key = "Knit",       words = { "knit", "knitclient" } },
-	{ key = "TopbarPlus", words = { "topbarplus" } },
-	{ key = "HD Admin",   words = { "hd admin", "hdadmin", "hdadminsetup" } },
-}
-
-local CAPABILITIES = {
-	"getconnections", "hookfunction", "hookmetamethod", "getgc",
-	"getrawmetatable", "fireproximityprompt", "fireclickdetector",
-	"firetouchinterest", "setclipboard", "request",
-}
-
-local function matchWord(name, words)
-	local lower = string.lower(tostring(name))
-	for _, word in ipairs(words) do
-		if string.find(lower, word, 1, true) then
-			return word
-		end
-	end
-	return nil
-end
-
-function Audit.riskyWord(name)
-	return matchWord(name, Audit.riskyWords)
-end
-
--- Ремоуты в ReplicatedStorage + имена, которые стоит проверить руками.
-function Audit.scanRemotes()
-	local result = { events = 0, functions = 0, risky = {}, scanned = 0 }
-
-	local okList, list = pcall(function()
-		return ReplicatedStorage:GetDescendants()
-	end)
-	if not okList or not list then return result end
-
-	for _, item in ipairs(list) do
-		if result.scanned >= Audit.maxScan then break end
-		result.scanned = result.scanned + 1
-
-		local isEvent = item:IsA("RemoteEvent")
-		local isFunc  = item:IsA("RemoteFunction")
-		if isEvent then result.events = result.events + 1 end
-		if isFunc  then result.functions = result.functions + 1 end
-
-		if isEvent or isFunc then
-			local word = Audit.riskyWord(item.Name)
-			if word then
-				table.insert(result.risky, ("[%s] %s"):format(word, item:GetFullName()))
-			end
-		end
-	end
-
-	return result
-end
-
--- Загруженные фреймворки: ищем по именам в ReplicatedStorage и PlayerGui.
-function Audit.scanFrameworks()
-	local found = {}
-	local seen  = {}
-	local roots = { ReplicatedStorage }
-	local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-	if playerGui then
-		table.insert(roots, playerGui)
-	end
-
-	for _, root in ipairs(roots) do
-		if root then
-			local okList, list = pcall(function()
-				return root:GetDescendants()
-			end)
-			if okList and list then
-				for _, item in ipairs(list) do
-					for _, proto in ipairs(FRAMEWORKS) do
-						if not seen[proto.key] and matchWord(item.Name, proto.words) then
-							seen[proto.key] = true
-							local version = item:GetAttribute("Version") or item:GetAttribute("VERSION")
-							if version then
-								table.insert(found, proto.key .. " (" .. tostring(version) .. ")")
-							else
-								table.insert(found, proto.key)
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	return found
-end
-
--- Флаги на локальном игроке: атрибуты и Value-объекты с «правами» в имени.
-function Audit.scanPlayerFlags()
-	local flags = {}
-
-	local okAttrs, attrs = pcall(function()
-		return LocalPlayer:GetAttributes()
-	end)
-	if okAttrs and attrs then
-		for name, value in pairs(attrs) do
-			if matchWord(name, Audit.flagWords) then
-				table.insert(flags, ("атрибут %s = %s"):format(name, tostring(value)))
-			end
-		end
-	end
-
-	local okKids, kids = pcall(function()
-		return LocalPlayer:GetChildren()
-	end)
-	if okKids and kids then
-		for _, child in ipairs(kids) do
-			if child:IsA("ValueBase") and matchWord(child.Name, Audit.flagWords) then
-				table.insert(flags, ("%s = %s"):format(child.Name, tostring(child.Value)))
-			end
-		end
-	end
-
-	return flags
-end
-
--- Что даёт исполнитель: от этого зависит, что вообще можно проверить.
-function Audit.scanCapabilities()
-	local list = {}
-	for _, name in ipairs(CAPABILITIES) do
-		if _G[name] then
-			table.insert(list, name)
-		end
-	end
-	return list
-end
-
-function Audit.report()
-	local remotes    = Audit.scanRemotes()
-	local frameworks = Audit.scanFrameworks()
-	local flags      = Audit.scanPlayerFlags()
-	local caps       = Audit.scanCapabilities()
-	local total      = remotes.events + remotes.functions
-
-	print("===== АУДИТ КЛИЕНТА =====")
-	print(("Фреймворки: %s"):format(#frameworks > 0 and table.concat(frameworks, ", ") or "не найдены"))
-	print(("Ремоуты: %d (Event %d / Function %d), просмотрено объектов: %d"):format(
-		total, remotes.events, remotes.functions, remotes.scanned
-	))
-
-	if #remotes.risky > 0 then
-		print(("Опасные имена (%d):"):format(#remotes.risky))
-		for index, line in ipairs(remotes.risky) do
-			if index > 25 then
-				print(("  ... и ещё %d"):format(#remotes.risky - 25))
-				break
-			end
-			print("  " .. line)
-		end
-	else
-		print("Опасных имён среди ремоутов нет")
-	end
-
-	if #flags > 0 then
-		print(("Флаги на игроке (%d):"):format(#flags))
-		for _, line in ipairs(flags) do
-			print("  " .. line)
-		end
-	else
-		print("Флагов на локальном игроке нет")
-	end
-
-	print(("Возможности исполнителя: %s"):format(
-		#caps > 0 and table.concat(caps, ", ") or "только стандартный Roblox"
-	))
-	print("=========================")
-
-	return {
-		remotes = remotes,
-		frameworks = frameworks,
-		flags = flags,
-		caps = caps,
-		total = total,
-	}
-end
-
 --// ---------------- Библиотека ----------------
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
@@ -1229,8 +1067,8 @@ Toggles = Library.Toggles
 
 --// ---------------- Window ----------------
 local Window = Library:CreateWindow({
-	Title = "СПЕРМА",
-	Footer = "WWW.PORNOHUB.COM",
+	Title = "Buffy Hub",
+	Footer = "v1.2.0 · no-main build",
 	Icon = 6031075931,          -- иконка окна (глаз), можно вписать другой rbxassetid
 	NotifySide = "Right",
 	ShowCustomCursor = false,   -- обычный курсор Roblox
@@ -1855,6 +1693,24 @@ AimBox:AddSlider("AimSmooth", {
 	end,
 })
 
+AimBox:AddToggle("AimCamera", {
+	Text = "Camera aim",
+	Default = false,
+	Tooltip = "Доводит камеру до цели, а не только персонажа",
+	Callback = function(state)
+		Aimbot.cameraMode = state
+	end,
+})
+
+AimBox:AddSlider("AimCameraSmooth", {
+	Text = "Camera smooth",
+	Default = 30, Min = 0, Max = 95, Rounding = 0,
+	Tooltip = "Плавность поворота камеры: 0 — резко, больше — мягче",
+	Callback = function(value)
+		Aimbot.cameraSmooth = value
+	end,
+})
+
 AimBox:AddSlider("AimStrength", {
 	Text = "Strength",
 	Default = 100, Min = 10, Max = 100, Rounding = 0,
@@ -1958,25 +1814,6 @@ InteractBox:AddLabel(
 	"При выключении тоггла исходные значения промптов (HoldDuration / дистанция / LineOfSight) восстанавливаются.",
 	true
 )
-
---// ================= MISC / Audit =================
-local AuditBox = Tabs.Misc:AddGroupbox({
-	Side = "Left",
-	Name = "Audit",
-	IconName = "shield",
-})
-
-AuditBox:AddButton({
-	Text = "Скан клиента",
-	Func = function()
-		local report = Audit.report()
-		Features.Notify("Аудит", ("Ремоутов: %d, опасных имён: %d, флагов: %d. Отчёт в консоли."):format(
-			report.total, #report.remotes.risky, #report.flags
-		))
-	end,
-})
-
-AuditBox:AddLabel("Knit, TopbarPlus, HD Admin — только поиск по именам в ReplicatedStorage и PlayerGui. Ремоуты считаются, но не вызываются; опасные имена — повод проверить руками. Флаги — атрибуты и Value на игроке (admin, vip, rank и т.п.).", true)
 
 --// ================= MISC / Movement =================
 local MoveBox = Tabs.Misc:AddGroupbox({
