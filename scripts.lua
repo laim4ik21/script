@@ -304,7 +304,7 @@ local Aimbot = {
 	strength   = 100,   -- сколько процентов пути к цели доводит аим
 	target     = nil,
 	lastTarget = nil,   -- последняя цель: её держит телепорт-следование
-	cameraMode   = false,  -- доводка камеры, а не только тела
+	mode         = "Body", -- Body | Camera | Body + camera
 	cameraSmooth = 30,     -- плавность поворота камеры
 	circle     = nil,
 	conn       = nil,
@@ -397,13 +397,16 @@ local function aimStep()
 	local basePoint = camera and (camera.CFrame.Position + camera.CFrame.LookVector * 50) or lookPos
 	local aimPoint = basePoint:Lerp(lookPos, Aimbot.strength / 100)
 
-	root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, aimPoint), alpha)
+	-- режим Camera крутит только камеру, тело остаётся как есть
+	if Aimbot.mode ~= "Camera" then
+		root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, aimPoint), alpha)
+	end
 end
 
 -- Доводка камеры: срабатывает после обновления камеры Roblox, поэтому её
 -- поворот не перебивается на этом же кадре.
 local function cameraAimStep()
-	if not Aimbot.cameraMode or not Aimbot.enabled then return end
+	if Aimbot.mode == "Body" or not Aimbot.enabled then return end
 	-- во время телепорта позицию меняет он, камеру не трогаем
 	if Teleport and Teleport.busy then return end
 
@@ -1693,12 +1696,13 @@ AimBox:AddSlider("AimSmooth", {
 	end,
 })
 
-AimBox:AddToggle("AimCamera", {
-	Text = "Camera aim",
-	Default = false,
-	Tooltip = "Доводит камеру до цели, а не только персонажа",
-	Callback = function(state)
-		Aimbot.cameraMode = state
+AimBox:AddDropdown("AimMode", {
+	Text = "Aim mode",
+	Values = { "Body", "Camera", "Body + camera" },
+	Default = 1,      -- Body: поворот тела, как было раньше
+	Tooltip = "Body — крутится персонаж, Camera — только камера, Body + camera — и то и другое",
+	Callback = function(value)
+		Aimbot.mode = value
 	end,
 })
 
