@@ -1206,9 +1206,11 @@ local function zeroCooldowns()
 	end
 end
 
-local function dashStep(_, dt)
+local function dashStep(dt)
 	if not Dash.enabled then return end
 	if not LocalPlayer.Character then return end
+
+	dt = dt or 0   -- Heartbeat отдаёт deltaTime первым аргументом
 
 	Dash.timer -= dt
 	if Dash.timer <= 0 then
