@@ -45,7 +45,7 @@ local CFG = {
 	LockedColor      = Color3.fromRGB(255, 50, 50),
 	PromptDistance   = 50,                           -- MaxActivationDistance в режиме instant
 	DoorEspDistance  = 500,
-	FlySpeedMax      = 100,   -- максимальная скорость флая, одна для всех
+	FlySpeedMax      = 300,   -- максимальная скорость флая, одна для всех
 	TeleportBehind   = 3.5,   -- сколько студов за спиной цели
 	TeleportSpeed    = 55,    -- студов в секунду при плавном перемещении
 	TeleportRange    = 250,   -- макс. дистанция до цели
@@ -299,9 +299,13 @@ local Teleport   -- модуль телепорта объявлен ниже: �
 local Aimbot = {
 	enabled    = false,
 	fov        = 150,
-	yOffset    = 28,
+	yOffset    = 10,    -- фиксированное смещение под верхнюю панель, в меню не выводится
 	smoothness = 45,    -- 0 = мгновенное прилипание, 95 = очень плавно
 	strength   = 100,   -- сколько процентов пути к цели доводит аим
+	rage       = false, -- rage aim: наведение бегает треугольником вокруг цели
+	rageRadius = 4,     -- радиус треугольника в студах
+	rageSpeed  = 2.5,   -- оборотов по треугольнику в секунду
+	rageT      = 0,     -- фаза 0..1 по периметру
 	target     = nil,
 	lastTarget = nil,   -- последняя цель: её держит телепорт-следование
 	circle     = nil,
@@ -347,7 +351,21 @@ local function findClosestTarget(centre)
 	return best
 end
 
-local function aimStep()
+-- Точка на периметре треугольника вокруг цели. t = 0..1 по всем трём сторонам.
+local function trianglePoint(centre, radius, t)
+	local seg = math.floor(t * 3) % 3
+	local u = t * 3 - math.floor(t * 3)
+	local step = math.pi * 2 / 3
+
+	local function vertex(index)
+		local angle = index * step
+		return Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+	end
+
+	return centre + vertex(seg):Lerp(vertex((seg + 1) % 3), u)
+end
+
+local function aimStep(dt)
 	-- во время телепорта не трогаем CFrame: две записи в один кадр дерутся между собой
 	if Teleport and Teleport.busy then return end
 
@@ -395,6 +413,14 @@ local function aimStep()
 	local basePoint = camera and (camera.CFrame.Position + camera.CFrame.LookVector * 50) or lookPos
 	local aimPoint = basePoint:Lerp(lookPos, Aimbot.strength / 100)
 
+	if Aimbot.rage then
+		-- rage: точка наведения гонится по сторонам треугольника вокруг цели,
+		-- поэтому персонаж крутится вокруг неё, не отрывая взгляд от неё
+		Aimbot.rageT = (Aimbot.rageT + (dt or 0) * Aimbot.rageSpeed) % 1
+		aimPoint = trianglePoint(lookPos, Aimbot.rageRadius, Aimbot.rageT)
+		alpha = 1 -- без сглаживания, иначе треугольник размазывается в круг
+	end
+
 	root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, aimPoint), alpha)
 end
 
@@ -418,6 +444,11 @@ function Aimbot:SetEnabled(state)
 	if not state then
 		self.target = nil
 	end
+end
+
+function Aimbot:SetRage(state)
+	self.rage = state
+	self.rageT = 0
 end
 
 function Aimbot:Stop()
@@ -1639,21 +1670,39 @@ AimBox:AddSlider("AimFOV", {
 	end,
 })
 
-AimBox:AddSlider("AimYOffset", {
-	Text = "Cursor Y offset",
-	Default = 28, Min = 0, Max = 60, Rounding = 0,
-	Tooltip = "Смещение под верхнюю панель Roblox",
-	Callback = function(value)
-		Aimbot.yOffset = value
-	end,
-})
-
 AimBox:AddSlider("AimSmooth", {
 	Text = "Smoothness",
 	Default = 45, Min = 0, Max = 95, Rounding = 0,
 	Tooltip = "0 — мгновенное прилипание, больше — плавнее",
 	Callback = function(value)
 		Aimbot.smoothness = value
+	end,
+})
+
+AimBox:AddToggle("RageAim", {
+	Text = "Rage aim",
+	Default = false,
+	Tooltip = "Наведение бегает треугольником вокруг цели",
+	Callback = function(state)
+		Aimbot:SetRage(state)
+	end,
+})
+
+AimBox:AddSlider("RageRadius", {
+	Text = "Rage radius",
+	Default = 4, Min = 2, Max = 12, Rounding = 0,
+	Tooltip = "Радиус треугольника вокруг цели, студы",
+	Callback = function(value)
+		Aimbot.rageRadius = value
+	end,
+})
+
+AimBox:AddSlider("RageSpeed", {
+	Text = "Rage speed",
+	Default = 2.5, Min = 0.5, Max = 6, Rounding = 1,
+	Tooltip = "Скорость по треугольнику, оборотов в секунду",
+	Callback = function(value)
+		Aimbot.rageSpeed = value
 	end,
 })
 
