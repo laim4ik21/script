@@ -39,6 +39,8 @@ local CFG = {
 	OutlineColor     = Color3.fromRGB(255, 255, 255),
 	FillTransparency = 0.5,
 	NameTextColor    = Color3.fromRGB(255, 255, 255),
+	BoxColor         = Color3.fromRGB(255, 255, 255), -- рамка и галочка ESP
+	HpBarColor       = Color3.fromRGB(80, 255, 80),   -- полоса HP в ESP
 	DoorColor        = Color3.fromRGB(255, 140, 0),
 	DoorTextColor    = Color3.fromRGB(255, 50, 50),
 	ReadyColor       = Color3.fromRGB(80, 255, 80),
@@ -61,6 +63,7 @@ local Esp = {
 	chams    = false,
 	names    = false,
 	boxes    = false,
+	bars     = false,
 	registry = {},   -- [player] = entry
 	conns    = {},
 }
@@ -122,7 +125,7 @@ local function ensureEntry(player)
 			local line = Drawing.new("Line")
 			line.Visible = false
 			line.Thickness = thickness or 1
-			line.Color = CFG.OutlineColor
+			line.Color = CFG.BoxColor
 			line.Transparency = 1
 			return line
 		end
@@ -136,7 +139,7 @@ local function ensureEntry(player)
 		local bar = Drawing.new("Square")
 		bar.Visible = false
 		bar.Filled = true
-		bar.Color = CFG.ReadyColor
+		bar.Color = CFG.HpBarColor
 		bar.Transparency = 1
 
 		entry.box = { newLine(1), newLine(1), newLine(1), newLine(1) }
@@ -287,6 +290,9 @@ local function hideBox(entry)
 	if entry.chevron then
 		for _, line in ipairs(entry.chevron) do line.Visible = false end
 	end
+end
+
+local function hideBar(entry)
 	if entry.barBg then entry.barBg.Visible = false end
 	if entry.bar then entry.bar.Visible = false end
 end
@@ -318,23 +324,25 @@ local function updateNames(camera)
 end
 
 local function updateBoxes(camera)
-	if not Esp.boxes then return end
+	if not (Esp.boxes or Esp.bars) then return end
 
 	for player, entry in pairs(Esp.registry) do
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
-		if not character or not humanoid or humanoid.Health <= 0 or not entry.box or not entry.barBg or not entry.bar then
+		local x1, y1, x2, y2
+		if character and humanoid and humanoid.Health > 0 then
+			x1, y1, x2, y2 = characterBounds(character, camera)
+		end
+
+		if not x1 then
 			hideBox(entry)
+			hideBar(entry)
 		else
-			local x1, y1, x2, y2 = characterBounds(character, camera)
+			local pad = 4
+			x1, y1, x2, y2 = x1 - pad, y1 - pad, x2 + pad, y2 + pad
 
-			if not x1 then
-				hideBox(entry)
-			else
-				local pad = 4
-				x1, y1, x2, y2 = x1 - pad, y1 - pad, x2 + pad, y2 + pad
-
+			if Esp.boxes and entry.box then
 				local box = entry.box
 				box[1].From = Vector2.new(x1, y1)
 				box[1].To = Vector2.new(x2, y1)
@@ -346,6 +354,19 @@ local function updateBoxes(camera)
 				box[4].To = Vector2.new(x1, y1)
 				for _, line in ipairs(box) do line.Visible = true end
 
+				if entry.chevron then
+					local centerX = (x1 + x2) / 2
+					entry.chevron[1].From = Vector2.new(centerX - 6, y1 - 8)
+					entry.chevron[1].To = Vector2.new(centerX, y1 - 15)
+					entry.chevron[2].From = Vector2.new(centerX, y1 - 15)
+					entry.chevron[2].To = Vector2.new(centerX + 6, y1 - 8)
+					for _, line in ipairs(entry.chevron) do line.Visible = true end
+				end
+			else
+				hideBox(entry)
+			end
+
+			if Esp.bars and entry.barBg and entry.bar then
 				local ratio = humanoid.MaxHealth > 0 and math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) or 0
 				local barHeight = y2 - y1
 				local barX = x1 - 8
@@ -357,15 +378,10 @@ local function updateBoxes(camera)
 				local fillHeight = barHeight * ratio
 				entry.bar.Position = Vector2.new(barX, y2 - fillHeight)
 				entry.bar.Size = Vector2.new(3, fillHeight)
-				entry.bar.Color = ratio > 0.5 and CFG.ReadyColor or (ratio > 0.25 and CFG.DoorColor or CFG.LockedColor)
+				entry.bar.Color = CFG.HpBarColor
 				entry.bar.Visible = fillHeight > 0.5
-
-				local centerX = (x1 + x2) / 2
-				entry.chevron[1].From = Vector2.new(centerX - 6, y1 - 8)
-				entry.chevron[1].To = Vector2.new(centerX, y1 - 15)
-				entry.chevron[2].From = Vector2.new(centerX, y1 - 15)
-				entry.chevron[2].To = Vector2.new(centerX + 6, y1 - 8)
-				for _, line in ipairs(entry.chevron) do line.Visible = true end
+			else
+				hideBar(entry)
 			end
 		end
 	end
@@ -386,6 +402,30 @@ function Esp:SetBoxes(state)
 		for _, entry in pairs(self.registry) do
 			hideBox(entry)
 		end
+	end
+end
+
+function Esp:SetBars(state)
+	self.bars = state
+
+	if not state then
+		for _, entry in pairs(self.registry) do
+			hideBar(entry)
+		end
+	end
+end
+
+-- Применить цвета из CFG к уже созданным Drawing (пикеры цветов зовут это)
+function Esp:ApplyColors()
+	for _, entry in pairs(self.registry) do
+		if entry.drawing then entry.drawing.Color = CFG.NameTextColor end
+		if entry.box then
+			for _, line in ipairs(entry.box) do line.Color = CFG.BoxColor end
+		end
+		if entry.chevron then
+			for _, line in ipairs(entry.chevron) do line.Color = CFG.BoxColor end
+		end
+		if entry.bar then entry.bar.Color = CFG.HpBarColor end
 	end
 end
 
@@ -435,6 +475,7 @@ function Esp:Stop()
 	self.chams = false
 	self.names = false
 	self.boxes = false
+	self.bars = false
 
 	for _, conn in ipairs(self.conns) do
 		if conn and conn.Connected then conn:Disconnect() end
@@ -1838,6 +1879,23 @@ end
 --// ================= VISUALS / Players =================
 Build("Visuals", function()
 -- Превью вида ESP прямо в меню: рамка, полоса HP слева, ник под рамкой и галочка сверху
+local previewParts
+
+-- Перекраска карточки: цвета те же, что в CFG
+local function applyPreviewColors()
+	local parts = previewParts
+	if not parts then return end
+
+	if parts.stroke then parts.stroke.Color = CFG.BoxColor end
+	if parts.bar then parts.bar.BackgroundColor3 = CFG.HpBarColor end
+	if parts.name then parts.name.TextColor3 = CFG.NameTextColor end
+	if parts.chevrons then
+		for _, chevron in ipairs(parts.chevrons) do
+			chevron.BackgroundColor3 = CFG.BoxColor
+		end
+	end
+end
+
 local function addEspPreview(groupbox)
 	local container = groupbox.Container
 	if not container then return end
@@ -1865,15 +1923,17 @@ local function addEspPreview(groupbox)
 	end
 
 	-- галочка над рамкой
+	local chevrons = {}
 	for _, side in ipairs({ -1, 1 }) do
 		local chevron = Instance.new("Frame")
 		chevron.AnchorPoint = Vector2.new(0.5, 0.5)
 		chevron.Position = UDim2.new(0.5, side * 5, 0, 9)
 		chevron.Size = UDim2.fromOffset(14, 2)
 		chevron.Rotation = side * 35
-		chevron.BackgroundColor3 = CFG.OutlineColor
+		chevron.BackgroundColor3 = CFG.BoxColor
 		chevron.BorderSizePixel = 0
 		chevron.Parent = holder
+		table.insert(chevrons, chevron)
 	end
 
 	-- рамка игрока
@@ -1891,7 +1951,7 @@ local function addEspPreview(groupbox)
 	boxCorner.Parent = box
 
 	local boxStroke = Instance.new("UIStroke")
-	boxStroke.Color = CFG.OutlineColor
+	boxStroke.Color = CFG.BoxColor
 	boxStroke.Transparency = 0.2
 	boxStroke.Thickness = 1
 	boxStroke.Parent = box
@@ -1920,7 +1980,7 @@ local function addEspPreview(groupbox)
 	bar.AnchorPoint = Vector2.new(0, 1)
 	bar.Position = UDim2.new(0, 0, 1, 0)
 	bar.Size = UDim2.new(1, 0, 0.85, 0)
-	bar.BackgroundColor3 = CFG.ReadyColor
+	bar.BackgroundColor3 = CFG.HpBarColor
 	bar.BorderSizePixel = 0
 	bar.Parent = barBg
 
@@ -1943,6 +2003,9 @@ local function addEspPreview(groupbox)
 	nameStroke.Color = Color3.fromRGB(0, 0, 0)
 	nameStroke.Transparency = 0.4
 	nameStroke.Parent = name
+
+	previewParts = { stroke = boxStroke, bar = bar, name = name, chevrons = chevrons }
+	applyPreviewColors()
 end
 
 local PlayersBox = Tabs.Visuals:AddGroupbox({
@@ -1961,11 +2024,20 @@ PlayersBox:AddToggle("PlayerChams", {
 })
 
 PlayersBox:AddToggle("BoxESP", {
-	Text = "Box + HP bar",
+	Text = "Box",
 	Default = true,
-	Tooltip = "Рамка вокруг игрока, полоса HP слева и галочка сверху",
+	Tooltip = "Рамка вокруг игрока и галочка сверху",
 	Callback = function(state)
 		Esp:SetBoxes(state)
+	end,
+})
+
+PlayersBox:AddToggle("HpBarESP", {
+	Text = "HP bar",
+	Default = true,
+	Tooltip = "Полоса здоровья слева от рамки",
+	Callback = function(state)
+		Esp:SetBars(state)
 	end,
 })
 
@@ -1981,6 +2053,43 @@ PlayersBox:AddToggle("NameESP", {
 PlayersBox:AddDivider()
 PlayersBox:AddLabel("Так будет выглядеть ESP на игроке:", true)
 addEspPreview(PlayersBox)
+
+-- Цвета ESP: меняются сразу и на живых игроках, и на карточке
+local ColorsBox = Tabs.Visuals:AddGroupbox({
+	Side = "Left",
+	Name = "ESP colors",
+	IconName = "eye",
+})
+
+ColorsBox:AddLabel("Box color"):AddColorPicker("EspBoxColor", {
+	Default = CFG.BoxColor,
+	Title = "Box color",
+	Callback = function(color)
+		CFG.BoxColor = color
+		Esp:ApplyColors()
+		applyPreviewColors()
+	end,
+})
+
+ColorsBox:AddLabel("HP bar color"):AddColorPicker("EspHpBarColor", {
+	Default = CFG.HpBarColor,
+	Title = "HP bar color",
+	Callback = function(color)
+		CFG.HpBarColor = color
+		Esp:ApplyColors()
+		applyPreviewColors()
+	end,
+})
+
+ColorsBox:AddLabel("Name color"):AddColorPicker("EspNameColor", {
+	Default = CFG.NameTextColor,
+	Title = "Name color",
+	Callback = function(color)
+		CFG.NameTextColor = color
+		Esp:ApplyColors()
+		applyPreviewColors()
+	end,
+})
 end)
 
 --// ================= HALLOWEEN / Doors =================
@@ -2371,6 +2480,7 @@ Farm:Init()
 
 Esp:SetChams(true)
 Esp:SetBoxes(true)
+Esp:SetBars(true)
 Esp:SetNames(true)
 Prompts:SetEsp(true)
 Prompts:SetInstant(true)
