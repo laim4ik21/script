@@ -1155,10 +1155,11 @@ local Window = Library:CreateWindow({
 })
 
 local Tabs = {
-	Visuals  = Window:AddTab("Visuals", "eye"),
-	Combat   = Window:AddTab("Combat", "crosshair"),
-	Misc     = Window:AddTab("Misc", "wrench"),
-	Settings = Window:AddTab("UI Settings", "settings"),
+	Visuals   = Window:AddTab("Visuals", "eye"),
+	Combat    = Window:AddTab("Combat", "crosshair"),
+	Misc      = Window:AddTab("Misc", "wrench"),
+	Halloween = Window:AddTab("Halloween", "moon"),
+	Settings  = Window:AddTab("UI Settings", "settings"),
 }
 
 --// ---------------- Общие функции ----------------
@@ -1701,9 +1702,11 @@ PlayersBox:AddToggle("NameESP", {
 		Esp:SetNames(state)
 	end,
 })
+end)
 
---// ================= VISUALS / Doors =================
-local DoorsBox = Tabs.Visuals:AddGroupbox({
+--// ================= HALLOWEEN / Doors =================
+Build("Halloween", function()
+local DoorsBox = Tabs.Halloween:AddGroupbox({
 	Side = "Right",
 	Name = "Doors",
 	IconName = "door-open",
@@ -1717,7 +1720,6 @@ DoorsBox:AddToggle("DoorESP", {
 		Prompts:SetEsp(state)
 	end,
 })
-
 end)
 
 --// ================= COMBAT / Aim =================
@@ -1839,9 +1841,9 @@ RageBox:AddSlider("RageSpeed", {
 RageBox:AddLabel("Держит ближайшего игрока в 100 студах, курсор и FOV не важны. Фигуры взаимоисключающие: включение одной выключает остальные. Пока включён — Aim assist уступает управление.", true)
 end)
 
---// ================= COMBAT / Teleport behind =================
-Build("Combat / Teleport", function()
-local TpBox = Tabs.Combat:AddGroupbox({
+--// ================= MISC / Teleport behind =================
+Build("Misc / Teleport", function()
+local TpBox = Tabs.Misc:AddGroupbox({
 	Side = "Left",
 	Name = "Teleport",
 	IconName = "move",
@@ -1881,11 +1883,11 @@ TpBox:AddSlider("TpSpeed", {
 TpBox:AddLabel("Идёт мелкими шагами по кадру (примерно 1 студ за кадр). Если игра всё равно дёргает назад — снизь скорость.", true)
 end)
 
---// ================= COMBAT / Debuffs =================
-Build("Combat / Debuffs", function()
-local DebuffBox = Tabs.Combat:AddGroupbox({
+--// ================= MISC / pikols (бывшие Debuffs) =================
+Build("Misc / pikols", function()
+local DebuffBox = Tabs.Misc:AddGroupbox({
 	Side = "Right",
-	Name = "Debuffs",
+	Name = "pikols",
 	IconName = "shield",
 })
 
@@ -1910,9 +1912,9 @@ DebuffBox:AddToggle("NoStun", {
 DebuffBox:AddLabel("Если сервер удерживает стан, персонажа может дёрнуть назад — это отклик сервера, а не баг скрипта.", true)
 end)
 
---// ================= MISC / Interaction =================
-Build("Misc", function()
-local InteractBox = Tabs.Misc:AddGroupbox({
+--// ================= HALLOWEEN / Interaction =================
+Build("Halloween", function()
+local InteractBox = Tabs.Halloween:AddGroupbox({
 	Side = "Left",
 	Name = "Interaction",
 	IconName = "hand",
@@ -1932,8 +1934,10 @@ InteractBox:AddLabel(
 	"При выключении тоггла исходные значения промптов (HoldDuration / дистанция / LineOfSight) восстанавливаются.",
 	true
 )
+end)
 
 --// ================= MISC / Movement =================
+Build("Misc", function()
 local MoveBox = Tabs.Misc:AddGroupbox({
 	Side = "Right",
 	Name = "Movement",
@@ -1965,9 +1969,11 @@ MoveBox:AddSlider("FlySpeed", {
 		Fly:SetSpeed(value)
 	end,
 })
+end)
 
---// ================= MISC / Auto farm =================
-local FarmBox = Tabs.Misc:AddGroupbox({
+--// ================= HALLOWEEN / Auto farm =================
+Build("Halloween", function()
+local FarmBox = Tabs.Halloween:AddGroupbox({
 	Side = "Right",
 	Name = "Auto farm",
 	IconName = "route",
