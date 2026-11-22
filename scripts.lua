@@ -1141,10 +1141,11 @@ end
 local Preview = {
 	enabled   = false,
 	model     = nil,
-	highlight = nil,
-	label     = nil,
-	conn      = nil,
-	scanTimer = 0,
+	highlight  = nil,
+	draws      = nil,
+	drawsReady = false,
+	conn       = nil,
+	scanTimer  = 0,
 }
 
 local function isPlayerModel(model)
@@ -1193,6 +1194,91 @@ local function attachPreview(model)
 	Preview.highlight = highlight
 end
 
+-- Всё, что рисуется поверх модели: рамка, полоса HP, ник, галочка сверху
+local function ensureDrawings()
+	if Preview.drawsReady or not HAS_DRAWING then return end
+
+	local function newLine(thickness)
+		local line = Drawing.new("Line")
+		line.Visible = false
+		line.Thickness = thickness or 1
+		line.Color = CFG.OutlineColor
+		line.Transparency = 1
+		return line
+	end
+
+	local barBg = Drawing.new("Square")
+	barBg.Visible = false
+	barBg.Filled = true
+	barBg.Color = Color3.fromRGB(15, 15, 18)
+	barBg.Transparency = 0.35
+
+	local bar = Drawing.new("Square")
+	bar.Visible = false
+	bar.Filled = true
+	bar.Color = CFG.ReadyColor
+	bar.Transparency = 1
+
+	local name = Drawing.new("Text")
+	name.Visible = false
+	name.Size = 14
+	name.Center = true
+	name.Outline = true
+	name.Color = CFG.NameTextColor
+
+	Preview.draws = {
+		box     = { newLine(1), newLine(1), newLine(1), newLine(1) },
+		barBg   = barBg,
+		bar     = bar,
+		name    = name,
+		chevron = { newLine(2), newLine(2) },
+	}
+	Preview.drawsReady = true
+end
+
+local function hideDraws()
+	local d = Preview.draws
+	if not d then return end
+
+	for _, line in ipairs(d.box) do line.Visible = false end
+	for _, line in ipairs(d.chevron) do line.Visible = false end
+	d.barBg.Visible = false
+	d.bar.Visible = false
+	d.name.Visible = false
+end
+
+-- Рамка по всем BasePart модели: проецируем 8 углов каждой части, берём крайние точки на экране
+local function modelBounds(model, camera)
+	local minX, minY = math.huge, math.huge
+	local maxX, maxY = -math.huge, -math.huge
+	local found = false
+
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local cf, size = part.CFrame, part.Size
+
+			for i = 0, 7 do
+				local sx = (i % 2 == 0) and -0.5 or 0.5
+				local sy = (math.floor(i / 2) % 2 == 0) and -0.5 or 0.5
+				local sz = (math.floor(i / 4) % 2 == 0) and -0.5 or 0.5
+				local world = cf:PointToWorldSpace(Vector3.new(size.X * sx, size.Y * sy, size.Z * sz))
+				local point, onScreen = camera:WorldToViewportPoint(world)
+
+				if onScreen then
+					found = true
+					minX = math.min(minX, point.X)
+					minY = math.min(minY, point.Y)
+					maxX = math.max(maxX, point.X)
+					maxY = math.max(maxY, point.Y)
+				end
+			end
+		end
+	end
+
+	if not found then return nil end
+	return minX, minY, maxX, maxY
+end
+
 local function clearPreview()
 	if Preview.highlight then
 		if Preview.highlight.Parent then
@@ -1201,11 +1287,7 @@ local function clearPreview()
 		Preview.highlight = nil
 	end
 
-	if Preview.label then
-		Preview.label:Remove()
-		Preview.label = nil
-	end
-
+	hideDraws()
 	Preview.model = nil
 end
 
@@ -1225,26 +1307,66 @@ local function previewStep(dt)
 	end
 
 	local model = Preview.model
-	if not model or not model.Parent then return end
-
-	local label = Preview.label
-	if not label then return end
-
-	local head = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart")
+	local d = Preview.draws
 	local camera = workspace.CurrentCamera
-	if not head or not camera then
-		label.Visible = false
+	if not model or not model.Parent or not d or not camera then
+		hideDraws()
 		return
 	end
 
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	local point, onScreen = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1.6, 0))
-
-	label.Visible = onScreen
-	if onScreen then
-		label.Position = Vector2.new(point.X, point.Y)
-		label.Text = ("%s · %d HP"):format(model.Name, math.floor(humanoid and humanoid.Health or 0))
+	local x1, y1, x2, y2 = modelBounds(model, camera)
+	if not x1 then
+		hideDraws()
+		return
 	end
+
+	local pad = 4
+	x1, y1, x2, y2 = x1 - pad, y1 - pad, x2 + pad, y2 + pad
+
+	-- рамка
+	local box = d.box
+	box[1].From = Vector2.new(x1, y1)
+	box[1].To = Vector2.new(x2, y1)
+	box[2].From = Vector2.new(x2, y1)
+	box[2].To = Vector2.new(x2, y2)
+	box[3].From = Vector2.new(x2, y2)
+	box[3].To = Vector2.new(x1, y2)
+	box[4].From = Vector2.new(x1, y2)
+	box[4].To = Vector2.new(x1, y1)
+	for _, line in ipairs(box) do line.Visible = true end
+
+	-- полоса HP слева от рамки, заполняется снизу вверх
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local health = humanoid and humanoid.Health or 0
+	local maxHealth = humanoid and humanoid.MaxHealth or 0
+	local ratio = maxHealth > 0 and math.clamp(health / maxHealth, 0, 1) or 0
+
+	local barWidth = 3
+	local barHeight = y2 - y1
+	local barX = x1 - 8
+
+	d.barBg.Position = Vector2.new(barX, y1)
+	d.barBg.Size = Vector2.new(barWidth, barHeight)
+	d.barBg.Visible = true
+
+	local fillHeight = barHeight * ratio
+	d.bar.Position = Vector2.new(barX, y2 - fillHeight)
+	d.bar.Size = Vector2.new(barWidth, fillHeight)
+	d.bar.Color = ratio > 0.5 and CFG.ReadyColor or (ratio > 0.25 and CFG.DoorColor or CFG.LockedColor)
+	d.bar.Visible = fillHeight > 0.5
+
+	-- ник под рамкой
+	local centerX = (x1 + x2) / 2
+	d.name.Position = Vector2.new(centerX, y2 + 5)
+	d.name.Text = model.Name
+	d.name.Visible = true
+
+	-- галочка над головой
+	d.chevron[1].From = Vector2.new(centerX - 6, y1 - 8)
+	d.chevron[1].To = Vector2.new(centerX, y1 - 15)
+	d.chevron[2].From = Vector2.new(centerX, y1 - 15)
+	d.chevron[2].To = Vector2.new(centerX + 6, y1 - 8)
+	for _, line in ipairs(d.chevron) do line.Visible = true end
 end
 
 function Preview:SetEnabled(state)
@@ -1256,17 +1378,8 @@ function Preview:SetEnabled(state)
 		return
 	end
 
+	ensureDrawings()
 	attachPreview(findPreviewModel())
-
-	if HAS_DRAWING and not self.label then
-		local text = Drawing.new("Text")
-		text.Visible = false
-		text.Size = 16
-		text.Center = true
-		text.Outline = true
-		text.Color = CFG.NameTextColor
-		self.label = text
-	end
 end
 
 function Preview:Init()
@@ -1276,6 +1389,17 @@ end
 function Preview:Stop()
 	self.enabled = false
 	clearPreview()
+
+	local d = self.draws
+	if d then
+		for _, line in ipairs(d.box) do line:Remove() end
+		for _, line in ipairs(d.chevron) do line:Remove() end
+		d.barBg:Remove()
+		d.bar:Remove()
+		d.name:Remove()
+		self.draws = nil
+		self.drawsReady = false
+	end
 
 	if self.conn then
 		self.conn:Disconnect()
@@ -1856,12 +1980,12 @@ PlayersBox:AddDivider()
 PlayersBox:AddToggle("PreviewVisuals", {
 	Text = "Preview on model",
 	Default = false,
-	Tooltip = "Рисует чамсы и ник на ближайшей модели с Humanoid, иначе на твоём персонаже",
+	Tooltip = "Рамка, полоса HP и ник на ближайшей модели с Humanoid, иначе на твоём персонаже",
 	Callback = function(state)
 		Preview:SetEnabled(state)
 	end,
 })
-PlayersBox:AddLabel("Превью рисует те же цвета из CFG, что видит ESP на игроках: без живых людей рядом можно подобрать цвет, размер и прозрачность.", true)
+PlayersBox:AddLabel("Превью рисует рамку, полосу HP и ник так же, как задумано для игроков: на болванчике можно подобрать цвета и толщину без живых людей рядом.", true)
 end)
 
 --// ================= HALLOWEEN / Doors =================
