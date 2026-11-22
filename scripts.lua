@@ -60,6 +60,7 @@ local CFG = {
 local Esp = {
 	chams    = false,
 	names    = false,
+	boxes    = false,
 	registry = {},   -- [player] = entry
 	conns    = {},
 }
@@ -115,6 +116,33 @@ local function ensureEntry(player)
 		text.Outline = true
 		text.Color = CFG.NameTextColor
 		entry.drawing = text
+
+		-- рамка, полоса HP и галочка: один комплект на игрока
+		local function newLine(thickness)
+			local line = Drawing.new("Line")
+			line.Visible = false
+			line.Thickness = thickness or 1
+			line.Color = CFG.OutlineColor
+			line.Transparency = 1
+			return line
+		end
+
+		local barBg = Drawing.new("Square")
+		barBg.Visible = false
+		barBg.Filled = true
+		barBg.Color = Color3.fromRGB(15, 15, 18)
+		barBg.Transparency = 0.35
+
+		local bar = Drawing.new("Square")
+		bar.Visible = false
+		bar.Filled = true
+		bar.Color = CFG.ReadyColor
+		bar.Transparency = 1
+
+		entry.box = { newLine(1), newLine(1), newLine(1), newLine(1) }
+		entry.barBg = barBg
+		entry.bar = bar
+		entry.chevron = { newLine(2), newLine(2) }
 	end
 
 	Esp.registry[player] = entry
@@ -198,16 +226,73 @@ local function unbindPlayer(player)
 	destroyHighlight(entry)
 	if entry.drawing then
 		entry.drawing:Remove()
+		entry.drawing = nil
+	end
+	if entry.box then
+		for _, line in ipairs(entry.box) do line:Remove() end
+		entry.box = nil
+	end
+	if entry.chevron then
+		for _, line in ipairs(entry.chevron) do line:Remove() end
+		entry.chevron = nil
+	end
+	if entry.barBg then
+		entry.barBg:Remove()
+		entry.barBg = nil
+	end
+	if entry.bar then
+		entry.bar:Remove()
+		entry.bar = nil
 	end
 
 	Esp.registry[player] = nil
 end
 
-local function updateNames()
-	if not Esp.names then return end
+-- Крайние точки всех BasePart модели на экране — по ним строится рамка
+local function characterBounds(character, camera)
+	local minX, minY = math.huge, math.huge
+	local maxX, maxY = -math.huge, -math.huge
+	local found = false
 
-	local camera = GetCamera()
-	if not camera then return end
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local cf, size = part.CFrame, part.Size
+
+			for i = 0, 7 do
+				local sx = (i % 2 == 0) and -0.5 or 0.5
+				local sy = (math.floor(i / 2) % 2 == 0) and -0.5 or 0.5
+				local sz = (math.floor(i / 4) % 2 == 0) and -0.5 or 0.5
+				local world = cf:PointToWorldSpace(Vector3.new(size.X * sx, size.Y * sy, size.Z * sz))
+				local point, onScreen = camera:WorldToViewportPoint(world)
+
+				if onScreen then
+					found = true
+					minX = math.min(minX, point.X)
+					minY = math.min(minY, point.Y)
+					maxX = math.max(maxX, point.X)
+					maxY = math.max(maxY, point.Y)
+				end
+			end
+		end
+	end
+
+	if not found then return nil end
+	return minX, minY, maxX, maxY
+end
+
+local function hideBox(entry)
+	if entry.box then
+		for _, line in ipairs(entry.box) do line.Visible = false end
+	end
+	if entry.chevron then
+		for _, line in ipairs(entry.chevron) do line.Visible = false end
+	end
+	if entry.barBg then entry.barBg.Visible = false end
+	if entry.bar then entry.bar.Visible = false end
+end
+
+local function updateNames(camera)
+	if not Esp.names then return end
 
 	for player, entry in pairs(Esp.registry) do
 		local text = entry.drawing
@@ -228,6 +313,78 @@ local function updateNames()
 			else
 				text.Visible = false
 			end
+		end
+	end
+end
+
+local function updateBoxes(camera)
+	if not Esp.boxes then return end
+
+	for player, entry in pairs(Esp.registry) do
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+		if not character or not humanoid or humanoid.Health <= 0 or not entry.box or not entry.barBg or not entry.bar then
+			hideBox(entry)
+		else
+			local x1, y1, x2, y2 = characterBounds(character, camera)
+
+			if not x1 then
+				hideBox(entry)
+			else
+				local pad = 4
+				x1, y1, x2, y2 = x1 - pad, y1 - pad, x2 + pad, y2 + pad
+
+				local box = entry.box
+				box[1].From = Vector2.new(x1, y1)
+				box[1].To = Vector2.new(x2, y1)
+				box[2].From = Vector2.new(x2, y1)
+				box[2].To = Vector2.new(x2, y2)
+				box[3].From = Vector2.new(x2, y2)
+				box[3].To = Vector2.new(x1, y2)
+				box[4].From = Vector2.new(x1, y2)
+				box[4].To = Vector2.new(x1, y1)
+				for _, line in ipairs(box) do line.Visible = true end
+
+				local ratio = humanoid.MaxHealth > 0 and math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1) or 0
+				local barHeight = y2 - y1
+				local barX = x1 - 8
+
+				entry.barBg.Position = Vector2.new(barX, y1)
+				entry.barBg.Size = Vector2.new(3, barHeight)
+				entry.barBg.Visible = true
+
+				local fillHeight = barHeight * ratio
+				entry.bar.Position = Vector2.new(barX, y2 - fillHeight)
+				entry.bar.Size = Vector2.new(3, fillHeight)
+				entry.bar.Color = ratio > 0.5 and CFG.ReadyColor or (ratio > 0.25 and CFG.DoorColor or CFG.LockedColor)
+				entry.bar.Visible = fillHeight > 0.5
+
+				local centerX = (x1 + x2) / 2
+				entry.chevron[1].From = Vector2.new(centerX - 6, y1 - 8)
+				entry.chevron[1].To = Vector2.new(centerX, y1 - 15)
+				entry.chevron[2].From = Vector2.new(centerX, y1 - 15)
+				entry.chevron[2].To = Vector2.new(centerX + 6, y1 - 8)
+				for _, line in ipairs(entry.chevron) do line.Visible = true end
+			end
+		end
+	end
+end
+
+local function renderEsp()
+	local camera = GetCamera()
+	if not camera then return end
+
+	updateNames(camera)
+	updateBoxes(camera)
+end
+
+function Esp:SetBoxes(state)
+	self.boxes = state
+
+	if not state then
+		for _, entry in pairs(self.registry) do
+			hideBox(entry)
 		end
 	end
 end
@@ -262,7 +419,7 @@ function Esp:Start()
 	table.insert(self.conns, Players.PlayerAdded:Connect(bindPlayer))
 	table.insert(self.conns, Players.PlayerRemoving:Connect(unbindPlayer))
 
-	self.renderConn = RunService.RenderStepped:Connect(updateNames)
+	self.renderConn = RunService.RenderStepped:Connect(renderEsp)
 
 	self.active = true
 	task.spawn(function()
@@ -277,6 +434,7 @@ function Esp:Stop()
 	self.active = false
 	self.chams = false
 	self.names = false
+	self.boxes = false
 
 	for _, conn in ipairs(self.conns) do
 		if conn and conn.Connected then conn:Disconnect() end
@@ -1802,6 +1960,15 @@ PlayersBox:AddToggle("PlayerChams", {
 	end,
 })
 
+PlayersBox:AddToggle("BoxESP", {
+	Text = "Box + HP bar",
+	Default = true,
+	Tooltip = "Рамка вокруг игрока, полоса HP слева и галочка сверху",
+	Callback = function(state)
+		Esp:SetBoxes(state)
+	end,
+})
+
 PlayersBox:AddToggle("NameESP", {
 	Text = "Name + HP",
 	Default = true,
@@ -2199,10 +2366,11 @@ Prompts:Start()
 Aimbot:Init()
 Rage:Init()
 Fly:Init()
-	Clean:Init()
-	Farm:Init()
+Clean:Init()
+Farm:Init()
 
 Esp:SetChams(true)
+Esp:SetBoxes(true)
 Esp:SetNames(true)
 Prompts:SetEsp(true)
 Prompts:SetInstant(true)
