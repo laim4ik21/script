@@ -1134,6 +1134,155 @@ function Clean:Stop()
 	end
 end
 
+--// ---------------- Модуль: превью визуалов на модельке ----------------
+-- Включаешь тоггл — скрипт берёт ближайшую модель с Humanoid (NPC / болванчик),
+-- а если такой рядом нет — свой персонаж, и рисует на ней ровно те же чамсы
+-- и ник с HP, что видит ESP на игроках. Нужно, чтобы подобрать цвет без живых людей.
+local Preview = {
+	enabled   = false,
+	model     = nil,
+	highlight = nil,
+	label     = nil,
+	conn      = nil,
+	scanTimer = 0,
+}
+
+local function isPlayerModel(model)
+	return Players:GetPlayerFromCharacter(model) ~= nil
+end
+
+-- Ближайшая нечужая модель с Humanoid: боты, манекены, ивентовые NPC
+local function findPreviewModel()
+	local origin = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	local best, bestDist = nil, math.huge
+
+	for _, object in ipairs(workspace:GetDescendants()) do
+		if object:IsA("Model")
+			and object ~= LocalPlayer.Character
+			and not isPlayerModel(object)
+			and object:FindFirstChildOfClass("Humanoid")
+			and object:FindFirstChild("HumanoidRootPart") then
+			local dist = 0
+			if origin then
+				dist = (object.HumanoidRootPart.Position - origin.Position).Magnitude
+			end
+
+			if dist < bestDist then
+				best, bestDist = object, dist
+			end
+		end
+	end
+
+	return best or LocalPlayer.Character
+end
+
+local function attachPreview(model)
+	if not model then return end
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "ObsidianPreview"
+	highlight.Adornee = model
+	highlight.FillColor = CFG.ChamsColor
+	highlight.OutlineColor = CFG.OutlineColor
+	highlight.FillTransparency = CFG.FillTransparency
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Parent = model
+
+	Preview.model = model
+	Preview.highlight = highlight
+end
+
+local function clearPreview()
+	if Preview.highlight then
+		if Preview.highlight.Parent then
+			Preview.highlight:Destroy()
+		end
+		Preview.highlight = nil
+	end
+
+	if Preview.label then
+		Preview.label:Remove()
+		Preview.label = nil
+	end
+
+	Preview.model = nil
+end
+
+local function previewStep(dt)
+	if not Preview.enabled then return end
+
+	-- модель могла умереть или исчезнуть — ищем заново раз в 2 секунды
+	Preview.scanTimer -= dt
+	if Preview.scanTimer <= 0 then
+		Preview.scanTimer = 2
+		if not Preview.model or not Preview.model.Parent then
+			Preview.model = findPreviewModel()
+			if Preview.model then
+				attachPreview(Preview.model)
+			end
+		end
+	end
+
+	local model = Preview.model
+	if not model or not model.Parent then return end
+
+	local label = Preview.label
+	if not label then return end
+
+	local head = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart")
+	local camera = workspace.CurrentCamera
+	if not head or not camera then
+		label.Visible = false
+		return
+	end
+
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local point, onScreen = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1.6, 0))
+
+	label.Visible = onScreen
+	if onScreen then
+		label.Position = Vector2.new(point.X, point.Y)
+		label.Text = ("%s · %d HP"):format(model.Name, math.floor(humanoid and humanoid.Health or 0))
+	end
+end
+
+function Preview:SetEnabled(state)
+	self.enabled = state
+	self.scanTimer = 0
+
+	if not state then
+		clearPreview()
+		return
+	end
+
+	attachPreview(findPreviewModel())
+
+	if HAS_DRAWING and not self.label then
+		local text = Drawing.new("Text")
+		text.Visible = false
+		text.Size = 16
+		text.Center = true
+		text.Outline = true
+		text.Color = CFG.NameTextColor
+		self.label = text
+	end
+end
+
+function Preview:Init()
+	self.conn = RunService.RenderStepped:Connect(previewStep)
+end
+
+function Preview:Stop()
+	self.enabled = false
+	clearPreview()
+
+	if self.conn then
+		self.conn:Disconnect()
+		self.conn = nil
+	end
+end
+
 --// ---------------- Библиотека ----------------
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
@@ -1702,6 +1851,17 @@ PlayersBox:AddToggle("NameESP", {
 		Esp:SetNames(state)
 	end,
 })
+
+PlayersBox:AddDivider()
+PlayersBox:AddToggle("PreviewVisuals", {
+	Text = "Preview on model",
+	Default = false,
+	Tooltip = "Рисует чамсы и ник на ближайшей модели с Humanoid, иначе на твоём персонаже",
+	Callback = function(state)
+		Preview:SetEnabled(state)
+	end,
+})
+PlayersBox:AddLabel("Превью рисует те же цвета из CFG, что видит ESP на игроках: без живых людей рядом можно подобрать цвет, размер и прозрачность.", true)
 end)
 
 --// ================= HALLOWEEN / Doors =================
@@ -2088,6 +2248,7 @@ Aimbot:Init()
 Rage:Init()
 Fly:Init()
 Clean:Init()
+Preview:Init()
 Farm:Init()
 
 Esp:SetChams(true)
@@ -2103,5 +2264,6 @@ Library:OnUnload(function()
 	Farm:Stop()
 	Fly:Stop()
 	Clean:Stop()
+	Preview:Stop()
 	print("Unloaded")
 end)
