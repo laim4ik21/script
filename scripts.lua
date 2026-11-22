@@ -1134,279 +1134,6 @@ function Clean:Stop()
 	end
 end
 
---// ---------------- Модуль: превью визуалов на модельке ----------------
--- Включаешь тоггл — скрипт берёт ближайшую модель с Humanoid (NPC / болванчик),
--- а если такой рядом нет — свой персонаж, и рисует на ней ровно те же чамсы
--- и ник с HP, что видит ESP на игроках. Нужно, чтобы подобрать цвет без живых людей.
-local Preview = {
-	enabled   = false,
-	model     = nil,
-	highlight  = nil,
-	draws      = nil,
-	drawsReady = false,
-	conn       = nil,
-	scanTimer  = 0,
-}
-
-local function isPlayerModel(model)
-	return Players:GetPlayerFromCharacter(model) ~= nil
-end
-
--- Ближайшая нечужая модель с Humanoid: боты, манекены, ивентовые NPC
-local function findPreviewModel()
-	local origin = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-	local best, bestDist = nil, math.huge
-
-	for _, object in ipairs(workspace:GetDescendants()) do
-		if object:IsA("Model")
-			and object ~= LocalPlayer.Character
-			and not isPlayerModel(object)
-			and object:FindFirstChildOfClass("Humanoid")
-			and object:FindFirstChild("HumanoidRootPart") then
-			local dist = 0
-			if origin then
-				dist = (object.HumanoidRootPart.Position - origin.Position).Magnitude
-			end
-
-			if dist < bestDist then
-				best, bestDist = object, dist
-			end
-		end
-	end
-
-	return best or LocalPlayer.Character
-end
-
-local function attachPreview(model)
-	if not model then return end
-
-	local highlight = Instance.new("Highlight")
-	highlight.Name = "ObsidianPreview"
-	highlight.Adornee = model
-	highlight.FillColor = CFG.ChamsColor
-	highlight.OutlineColor = CFG.OutlineColor
-	highlight.FillTransparency = CFG.FillTransparency
-	highlight.OutlineTransparency = 0
-	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	highlight.Parent = model
-
-	Preview.model = model
-	Preview.highlight = highlight
-end
-
--- Всё, что рисуется поверх модели: рамка, полоса HP, ник, галочка сверху
-local function ensureDrawings()
-	if Preview.drawsReady or not HAS_DRAWING then return end
-
-	local function newLine(thickness)
-		local line = Drawing.new("Line")
-		line.Visible = false
-		line.Thickness = thickness or 1
-		line.Color = CFG.OutlineColor
-		line.Transparency = 1
-		return line
-	end
-
-	local barBg = Drawing.new("Square")
-	barBg.Visible = false
-	barBg.Filled = true
-	barBg.Color = Color3.fromRGB(15, 15, 18)
-	barBg.Transparency = 0.35
-
-	local bar = Drawing.new("Square")
-	bar.Visible = false
-	bar.Filled = true
-	bar.Color = CFG.ReadyColor
-	bar.Transparency = 1
-
-	local name = Drawing.new("Text")
-	name.Visible = false
-	name.Size = 14
-	name.Center = true
-	name.Outline = true
-	name.Color = CFG.NameTextColor
-
-	Preview.draws = {
-		box     = { newLine(1), newLine(1), newLine(1), newLine(1) },
-		barBg   = barBg,
-		bar     = bar,
-		name    = name,
-		chevron = { newLine(2), newLine(2) },
-	}
-	Preview.drawsReady = true
-end
-
-local function hideDraws()
-	local d = Preview.draws
-	if not d then return end
-
-	for _, line in ipairs(d.box) do line.Visible = false end
-	for _, line in ipairs(d.chevron) do line.Visible = false end
-	d.barBg.Visible = false
-	d.bar.Visible = false
-	d.name.Visible = false
-end
-
--- Рамка по всем BasePart модели: проецируем 8 углов каждой части, берём крайние точки на экране
-local function modelBounds(model, camera)
-	local minX, minY = math.huge, math.huge
-	local maxX, maxY = -math.huge, -math.huge
-	local found = false
-
-	for _, part in ipairs(model:GetDescendants()) do
-		if part:IsA("BasePart") then
-			local cf, size = part.CFrame, part.Size
-
-			for i = 0, 7 do
-				local sx = (i % 2 == 0) and -0.5 or 0.5
-				local sy = (math.floor(i / 2) % 2 == 0) and -0.5 or 0.5
-				local sz = (math.floor(i / 4) % 2 == 0) and -0.5 or 0.5
-				local world = cf:PointToWorldSpace(Vector3.new(size.X * sx, size.Y * sy, size.Z * sz))
-				local point, onScreen = camera:WorldToViewportPoint(world)
-
-				if onScreen then
-					found = true
-					minX = math.min(minX, point.X)
-					minY = math.min(minY, point.Y)
-					maxX = math.max(maxX, point.X)
-					maxY = math.max(maxY, point.Y)
-				end
-			end
-		end
-	end
-
-	if not found then return nil end
-	return minX, minY, maxX, maxY
-end
-
-local function clearPreview()
-	if Preview.highlight then
-		if Preview.highlight.Parent then
-			Preview.highlight:Destroy()
-		end
-		Preview.highlight = nil
-	end
-
-	hideDraws()
-	Preview.model = nil
-end
-
-local function previewStep(dt)
-	if not Preview.enabled then return end
-
-	-- модель могла умереть или исчезнуть — ищем заново раз в 2 секунды
-	Preview.scanTimer -= dt
-	if Preview.scanTimer <= 0 then
-		Preview.scanTimer = 2
-		if not Preview.model or not Preview.model.Parent then
-			Preview.model = findPreviewModel()
-			if Preview.model then
-				attachPreview(Preview.model)
-			end
-		end
-	end
-
-	local model = Preview.model
-	local d = Preview.draws
-	local camera = workspace.CurrentCamera
-	if not model or not model.Parent or not d or not camera then
-		hideDraws()
-		return
-	end
-
-	local x1, y1, x2, y2 = modelBounds(model, camera)
-	if not x1 then
-		hideDraws()
-		return
-	end
-
-	local pad = 4
-	x1, y1, x2, y2 = x1 - pad, y1 - pad, x2 + pad, y2 + pad
-
-	-- рамка
-	local box = d.box
-	box[1].From = Vector2.new(x1, y1)
-	box[1].To = Vector2.new(x2, y1)
-	box[2].From = Vector2.new(x2, y1)
-	box[2].To = Vector2.new(x2, y2)
-	box[3].From = Vector2.new(x2, y2)
-	box[3].To = Vector2.new(x1, y2)
-	box[4].From = Vector2.new(x1, y2)
-	box[4].To = Vector2.new(x1, y1)
-	for _, line in ipairs(box) do line.Visible = true end
-
-	-- полоса HP слева от рамки, заполняется снизу вверх
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	local health = humanoid and humanoid.Health or 0
-	local maxHealth = humanoid and humanoid.MaxHealth or 0
-	local ratio = maxHealth > 0 and math.clamp(health / maxHealth, 0, 1) or 0
-
-	local barWidth = 3
-	local barHeight = y2 - y1
-	local barX = x1 - 8
-
-	d.barBg.Position = Vector2.new(barX, y1)
-	d.barBg.Size = Vector2.new(barWidth, barHeight)
-	d.barBg.Visible = true
-
-	local fillHeight = barHeight * ratio
-	d.bar.Position = Vector2.new(barX, y2 - fillHeight)
-	d.bar.Size = Vector2.new(barWidth, fillHeight)
-	d.bar.Color = ratio > 0.5 and CFG.ReadyColor or (ratio > 0.25 and CFG.DoorColor or CFG.LockedColor)
-	d.bar.Visible = fillHeight > 0.5
-
-	-- ник под рамкой
-	local centerX = (x1 + x2) / 2
-	d.name.Position = Vector2.new(centerX, y2 + 5)
-	d.name.Text = model.Name
-	d.name.Visible = true
-
-	-- галочка над головой
-	d.chevron[1].From = Vector2.new(centerX - 6, y1 - 8)
-	d.chevron[1].To = Vector2.new(centerX, y1 - 15)
-	d.chevron[2].From = Vector2.new(centerX, y1 - 15)
-	d.chevron[2].To = Vector2.new(centerX + 6, y1 - 8)
-	for _, line in ipairs(d.chevron) do line.Visible = true end
-end
-
-function Preview:SetEnabled(state)
-	self.enabled = state
-	self.scanTimer = 0
-
-	if not state then
-		clearPreview()
-		return
-	end
-
-	ensureDrawings()
-	attachPreview(findPreviewModel())
-end
-
-function Preview:Init()
-	self.conn = RunService.RenderStepped:Connect(previewStep)
-end
-
-function Preview:Stop()
-	self.enabled = false
-	clearPreview()
-
-	local d = self.draws
-	if d then
-		for _, line in ipairs(d.box) do line:Remove() end
-		for _, line in ipairs(d.chevron) do line:Remove() end
-		d.barBg:Remove()
-		d.bar:Remove()
-		d.name:Remove()
-		self.draws = nil
-		self.drawsReady = false
-	end
-
-	if self.conn then
-		self.conn:Disconnect()
-		self.conn = nil
-	end
-end
-
 --// ---------------- Библиотека ----------------
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
@@ -1952,6 +1679,114 @@ end
 
 --// ================= VISUALS / Players =================
 Build("Visuals", function()
+-- Превью вида ESP прямо в меню: рамка, полоса HP слева, ник под рамкой и галочка сверху
+local function addEspPreview(groupbox)
+	local container = groupbox.Container
+	if not container then return end
+
+	local holder = Instance.new("Frame")
+	holder.Name = "EspPreview"
+	holder.BackgroundTransparency = 1
+	holder.Size = UDim2.new(1, 0, 0, 178)
+	holder.Parent = container
+
+	local function newPart(parent, size, position, radius)
+		local part = Instance.new("Frame")
+		part.AnchorPoint = Vector2.new(0.5, 0)
+		part.Position = position
+		part.Size = size
+		part.BackgroundColor3 = Color3.fromRGB(150, 156, 168)
+		part.BackgroundTransparency = 0.35
+		part.BorderSizePixel = 0
+		part.Parent = parent
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, radius or 3)
+		corner.Parent = part
+		return part
+	end
+
+	-- галочка над рамкой
+	for _, side in ipairs({ -1, 1 }) do
+		local chevron = Instance.new("Frame")
+		chevron.AnchorPoint = Vector2.new(0.5, 0.5)
+		chevron.Position = UDim2.new(0.5, side * 5, 0, 9)
+		chevron.Size = UDim2.fromOffset(14, 2)
+		chevron.Rotation = side * 35
+		chevron.BackgroundColor3 = CFG.OutlineColor
+		chevron.BorderSizePixel = 0
+		chevron.Parent = holder
+	end
+
+	-- рамка игрока
+	local box = Instance.new("Frame")
+	box.AnchorPoint = Vector2.new(0.5, 0)
+	box.Position = UDim2.new(0.5, 0, 0, 18)
+	box.Size = UDim2.fromOffset(96, 128)
+	box.BackgroundColor3 = Color3.fromRGB(10, 10, 13)
+	box.BackgroundTransparency = 0.15
+	box.BorderSizePixel = 0
+	box.Parent = holder
+
+	local boxCorner = Instance.new("UICorner")
+	boxCorner.CornerRadius = UDim.new(0, 3)
+	boxCorner.Parent = box
+
+	local boxStroke = Instance.new("UIStroke")
+	boxStroke.Color = CFG.OutlineColor
+	boxStroke.Transparency = 0.2
+	boxStroke.Thickness = 1
+	boxStroke.Parent = box
+
+	-- силуэт персонажа внутри рамки
+	newPart(box, UDim2.fromOffset(20, 20), UDim2.new(0.5, 0, 0, 16), 10)
+	newPart(box, UDim2.fromOffset(40, 42), UDim2.new(0.5, 0, 0, 40))
+	newPart(box, UDim2.fromOffset(14, 38), UDim2.new(0.5, -10, 0, 86))
+	newPart(box, UDim2.fromOffset(14, 38), UDim2.new(0.5, 10, 0, 86))
+
+	-- полоса HP слева от рамки
+	local barBg = Instance.new("Frame")
+	barBg.AnchorPoint = Vector2.new(1, 0)
+	barBg.Position = UDim2.new(0, -6, 0, 0)
+	barBg.Size = UDim2.new(0, 4, 1, 0)
+	barBg.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+	barBg.BackgroundTransparency = 0.15
+	barBg.BorderSizePixel = 0
+	barBg.Parent = box
+
+	local barBgCorner = Instance.new("UICorner")
+	barBgCorner.CornerRadius = UDim.new(0, 2)
+	barBgCorner.Parent = barBg
+
+	local bar = Instance.new("Frame")
+	bar.AnchorPoint = Vector2.new(0, 1)
+	bar.Position = UDim2.new(0, 0, 1, 0)
+	bar.Size = UDim2.new(1, 0, 0.85, 0)
+	bar.BackgroundColor3 = CFG.ReadyColor
+	bar.BorderSizePixel = 0
+	bar.Parent = barBg
+
+	local barCorner = Instance.new("UICorner")
+	barCorner.CornerRadius = UDim.new(0, 2)
+	barCorner.Parent = bar
+
+	-- ник под рамкой
+	local name = Instance.new("TextLabel")
+	name.Position = UDim2.new(0, 0, 0, 150)
+	name.Size = UDim2.new(1, 0, 0, 16)
+	name.BackgroundTransparency = 1
+	name.Font = Enum.Font.Gotham
+	name.Text = "Player · 100 HP"
+	name.TextSize = 12
+	name.TextColor3 = CFG.NameTextColor
+	name.Parent = holder
+
+	local nameStroke = Instance.new("UIStroke")
+	nameStroke.Color = Color3.fromRGB(0, 0, 0)
+	nameStroke.Transparency = 0.4
+	nameStroke.Parent = name
+end
+
 local PlayersBox = Tabs.Visuals:AddGroupbox({
 	Side = "Left",
 	Name = "Players",
@@ -1977,15 +1812,8 @@ PlayersBox:AddToggle("NameESP", {
 })
 
 PlayersBox:AddDivider()
-PlayersBox:AddToggle("PreviewVisuals", {
-	Text = "Preview on model",
-	Default = false,
-	Tooltip = "Рамка, полоса HP и ник на ближайшей модели с Humanoid, иначе на твоём персонаже",
-	Callback = function(state)
-		Preview:SetEnabled(state)
-	end,
-})
-PlayersBox:AddLabel("Превью рисует рамку, полосу HP и ник так же, как задумано для игроков: на болванчике можно подобрать цвета и толщину без живых людей рядом.", true)
+PlayersBox:AddLabel("Так будет выглядеть ESP на игроке:", true)
+addEspPreview(PlayersBox)
 end)
 
 --// ================= HALLOWEEN / Doors =================
@@ -2371,9 +2199,8 @@ Prompts:Start()
 Aimbot:Init()
 Rage:Init()
 Fly:Init()
-Clean:Init()
-Preview:Init()
-Farm:Init()
+	Clean:Init()
+	Farm:Init()
 
 Esp:SetChams(true)
 Esp:SetNames(true)
@@ -2388,6 +2215,5 @@ Library:OnUnload(function()
 	Farm:Stop()
 	Fly:Stop()
 	Clean:Stop()
-	Preview:Stop()
 	print("Unloaded")
 end)
